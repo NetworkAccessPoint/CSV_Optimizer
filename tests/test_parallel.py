@@ -56,10 +56,23 @@ class PlanTest(unittest.TestCase):
 
 
 class WorkerPoolTest(unittest.TestCase):
-    """Actually spawns processes; kept to one small file to stay quick."""
+    """Actually spawns processes; kept to one small file to stay quick.
+
+    Only runs when CSVOPT_TEST_POOL=1, which ``tools/run_pool_tests.py`` sets.
+    Spawned workers re-import the program's __main__ module, and under
+    ``python -m unittest`` that module is the unittest runner itself, which
+    re-runs the suite inside every worker -- harmless on some platforms,
+    a deadlock on others.  The runner script gives the workers a __main__ that
+    is safe to import anywhere.
+    """
 
     @classmethod
     def setUpClass(cls):
+        if os.environ.get("CSVOPT_TEST_POOL") != "1":
+            raise unittest.SkipTest(
+                "worker-pool tests run via tools/run_pool_tests.py "
+                "(set CSVOPT_TEST_POOL=1 to run them here)"
+            )
         cls.dir = tempfile.TemporaryDirectory()
         cls.path = os.path.join(cls.dir.name, "pool.csv")
         with open(cls.path, "w", encoding="utf-8", newline="") as fh:
@@ -85,7 +98,7 @@ class WorkerPoolTest(unittest.TestCase):
         conditions = self.conditions(column="level", op="equals", value="ERROR")
         expected = list(ops.run_filter(self.table, conditions, workers=1))
         found = parallel.filter_parallel(
-            self.table, conditions, workers=2, min_segment_rows=5000)
+            self.table, conditions, workers=2, min_segment_rows=5000, probe_timeout=10)
         if found is None:
             self.skipTest("this environment cannot start worker processes")
         self.assertEqual(list(found), expected)
@@ -95,7 +108,7 @@ class WorkerPoolTest(unittest.TestCase):
         conditions = self.conditions(column="msg", op="regex", value=r"line \d*7$")
         expected = list(ops.run_filter(self.table, conditions, workers=1))
         found = parallel.filter_parallel(
-            self.table, conditions, workers=3, min_segment_rows=3000)
+            self.table, conditions, workers=3, min_segment_rows=3000, probe_timeout=10)
         if found is None:
             self.skipTest("this environment cannot start worker processes")
         self.assertEqual(list(found), expected)
@@ -104,7 +117,7 @@ class WorkerPoolTest(unittest.TestCase):
     def test_pool_respects_a_limit(self):
         conditions = self.conditions(column="level", op="equals", value="INFO")
         found = parallel.filter_parallel(
-            self.table, conditions, workers=2, limit=10, min_segment_rows=5000)
+            self.table, conditions, workers=2, limit=10, min_segment_rows=5000, probe_timeout=10)
         if found is None:
             self.skipTest("this environment cannot start worker processes")
         self.assertEqual(len(found), 10)
@@ -116,7 +129,7 @@ class WorkerPoolTest(unittest.TestCase):
         with self.assertRaises(Aborted):
             parallel.filter_parallel(
                 self.table, conditions, workers=2, min_segment_rows=5000,
-                progress=lambda done, total: False,
+                probe_timeout=10, progress=lambda done, total: False,
             )
 
 

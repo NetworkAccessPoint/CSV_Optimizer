@@ -23,6 +23,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Run the test suite
         run: python -m unittest discover -s tests -t .
+      - name: Run the worker-pool tests
+        run: python tools/run_pool_tests.py
       - name: Smoke test the CLI
         shell: bash
         run: |

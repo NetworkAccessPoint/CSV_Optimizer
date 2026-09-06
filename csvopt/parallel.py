@@ -17,7 +17,12 @@ from __future__ import annotations
 import multiprocessing
 import os
 from array import array
-from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import (
+    BrokenExecutor,
+    ProcessPoolExecutor,
+    TimeoutError as FutureTimeout,
+    as_completed,
+)
 from typing import Callable, Optional, Sequence
 
 from .index import Aborted
@@ -30,6 +35,10 @@ MIN_PARALLEL_ROWS = 2_000_000
 MIN_PARALLEL_BYTES = 256 << 20
 SEGMENTS_PER_WORKER = 4
 MIN_SEGMENT_ROWS = 100_000
+# How long a brand new pool gets to answer a trivial task. Some hosts can start
+# processes but never get them running usefully (a __main__ that re-runs itself,
+# a locked-down sandbox); rather than hang, csvopt gives up and scans inline.
+POOL_PROBE_TIMEOUT = 20.0
 
 
 # Set once a pool has proved impossible here (a sandbox, a frozen build without
@@ -88,6 +97,18 @@ def _worker_table(path: str, use_cache: bool) -> Table:
     return table
 
 
+def _ping() -> str:
+    """Trivial task used to check that a worker can actually run."""
+    return "ok"
+
+
+def _pool_ready(executor: ProcessPoolExecutor, timeout: float) -> bool:
+    try:
+        return executor.submit(_ping).result(timeout=timeout) == "ok"
+    except (BrokenExecutor, FutureTimeout, OSError, ValueError, RuntimeError, EOFError):
+        return False
+
+
 def _terminate(executor: ProcessPoolExecutor) -> None:
     """Stop the pool now: cancelling futures leaves running scans alive."""
     executor.shutdown(wait=False, cancel_futures=True)
@@ -105,6 +126,7 @@ def filter_parallel(
     match_all: bool = True,
     limit: Optional[int] = None,
     min_segment_rows: int = MIN_SEGMENT_ROWS,
+    probe_timeout: float = POOL_PROBE_TIMEOUT,
     progress: Optional[Callable[[int, int], bool]] = None,
 ) -> Optional[array]:
     """Filter with a process pool, or return None if the pool cannot be used."""
@@ -128,6 +150,11 @@ def filter_parallel(
         executor = ProcessPoolExecutor(max_workers=workers, mp_context=context)
     except (OSError, ValueError, RuntimeError, ImportError):
         _POOL_UNAVAILABLE = True  # no processes here; the caller scans inline
+        return None
+    if not _pool_ready(executor, probe_timeout):
+        _POOL_UNAVAILABLE = True
+        _terminate(executor)
+        executor.shutdown(wait=False)
         return None
     try:
         futures = [executor.submit(_worker, payload) for payload in payloads]
