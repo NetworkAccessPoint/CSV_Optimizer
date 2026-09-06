@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>csvopt — 대용량 CSV/로그 편집기</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <header class="toolbar">
+    <div class="brand" title="csvopt">csv<span>opt</span></div>
+    <button id="btn-open" class="btn" title="파일 열기 (O)">열기</button>
+    <div class="file-meta">
+      <span id="file-name">파일 없음</span>
+      <span id="file-sub" class="muted"></span>
+    </div>
+    <div class="spacer"></div>
+    <div class="group">
+      <button id="btn-undo" class="btn icon" title="실행 취소" disabled>↶</button>
+      <button id="btn-redo" class="btn icon" title="다시 실행" disabled>↷</button>
+    </div>
+    <div class="group">
+      <button id="btn-find" class="btn" title="찾기/바꾸기">찾기·바꾸기</button>
+      <button id="btn-tools" class="btn" title="도구">도구</button>
+      <button id="btn-help" class="btn icon" title="단축키">?</button>
+    </div>
+    <div class="group">
+      <button id="btn-save" class="btn primary" title="저장" disabled>저장</button>
+      <button id="btn-saveas" class="btn" title="다른 이름으로 저장 / 내보내기">내보내기</button>
+    </div>
+    <button id="btn-theme" class="btn icon" title="테마 전환">◐</button>
+  </header>
+
+  <div class="filterbar">
+    <div class="quick">
+      <input id="quick" type="search" placeholder="전체 검색 (Enter로 필터 적용)" autocomplete="off">
+      <label class="chk"><input type="checkbox" id="quick-regex"> 정규식</label>
+      <label class="chk"><input type="checkbox" id="quick-case"> 대소문자</label>
+      <label class="chk"><input type="checkbox" id="scope-view"> 현재 결과 내에서</label>
+    </div>
+    <div id="chips" class="chips"></div>
+    <button id="btn-addfilter" class="btn small">+ 조건</button>
+    <button id="btn-clearfilter" class="btn small ghost">필터 해제</button>
+  </div>
+
+  <main class="body">
+    <section class="gridwrap">
+      <div id="grid" class="grid" tabindex="0">
+        <div id="header" class="ghead"></div>
+        <div id="viewport" class="viewport">
+          <div id="canvas" class="canvas"></div>
+        </div>
+      </div>
+      <div id="empty" class="empty">
+        <h1>대용량 CSV / 로그 뷰어</h1>
+        <p>수 GB 로그도 인덱스만 만들어 바로 열립니다. 파일을 선택해 시작하세요.</p>
+        <button id="btn-open2" class="btn primary">파일 열기</button>
+      </div>
+    </section>
+
+    <aside id="side" class="side hidden">
+      <div class="side-tabs">
+        <button data-tab="facets" class="tab active">값 분포</button>
+        <button data-tab="find" class="tab">찾기·바꾸기</button>
+        <button data-tab="marks" class="tab">북마크</button>
+        <button data-tab="cols" class="tab">열</button>
+      </div>
+      <div class="side-body">
+        <div data-panel="facets" class="panel">
+          <div class="row">
+            <select id="facet-col"></select>
+            <button id="facet-run" class="btn small">분석</button>
+          </div>
+          <div id="facet-out" class="facet-out muted">열을 고르고 분석을 누르세요.</div>
+        </div>
+        <div data-panel="find" class="panel hidden">
+          <input id="find-needle" placeholder="찾을 내용">
+          <input id="find-repl" placeholder="바꿀 내용">
+          <div class="row wrap">
+            <select id="find-col"><option value="">모든 열</option></select>
+            <label class="chk"><input type="checkbox" id="find-regex"> 정규식</label>
+            <label class="chk"><input type="checkbox" id="find-case"> 대소문자</label>
+            <label class="chk"><input type="checkbox" id="find-whole"> 셀 전체 일치</label>
+            <label class="chk"><input type="checkbox" id="find-scope" checked> 현재 결과만</label>
+          </div>
+          <div class="row">
+            <button id="find-run" class="btn small">찾기</button>
+            <button id="find-prev" class="btn small ghost">◀</button>
+            <button id="find-next" class="btn small ghost">▶</button>
+            <button id="find-replace" class="btn small danger">모두 바꾸기</button>
+          </div>
+          <div id="find-out" class="muted"></div>
+        </div>
+        <div data-panel="marks" class="panel hidden">
+          <div class="row"><button id="mark-clear" class="btn small ghost">모두 지우기</button>
+            <span class="muted">행에서 <b>M</b> 키로 북마크</span></div>
+          <div id="mark-list" class="marks"></div>
+        </div>
+        <div data-panel="cols" class="panel hidden">
+          <div class="row"><button id="col-add" class="btn small">+ 열 추가</button>
+            <button id="col-showall" class="btn small ghost">모두 표시</button></div>
+          <div id="col-list" class="collist"></div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="status">
+    <span id="st-rows">—</span>
+    <span id="st-view" class="muted"></span>
+    <span id="st-sel" class="muted"></span>
+    <div class="spacer"></div>
+    <div id="job" class="job hidden">
+      <span id="job-label"></span>
+      <div class="bar"><div id="job-bar"></div></div>
+      <button id="job-cancel" class="btn tiny ghost">취소</button>
+    </div>
+    <span id="st-msg" class="muted"></span>
+  </footer>
+</div>
+
+<div id="modal-root"></div>
+<div id="ctx" class="ctx hidden"></div>
+<script src="/static/api.js"></script>
+<script src="/static/grid.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
