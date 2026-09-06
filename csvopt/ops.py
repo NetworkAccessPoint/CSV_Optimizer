@@ -196,7 +196,66 @@ def compile_conditions(table: Table, conditions: Iterable[Condition]) -> list[Co
     return compiled
 
 
-PREFILTERABLE = ("contains", "equals", "starts", "ends")
+try:  # the regex parser moved in 3.11
+    from re import _constants as _re_constants
+    from re import _parser as _re_parser
+except ImportError:  # pragma: no cover - Python 3.9/3.10
+    import sre_constants as _re_constants
+    import sre_parse as _re_parser
+
+PREFILTERABLE = ("contains", "equals", "starts", "ends", "regex")
+
+
+def regex_literals(pattern: str, flags: int = 0) -> list[str]:
+    """Substrings that every string matching ``pattern`` must contain.
+
+    ``ERROR.*timeout`` must contain both "ERROR" and "timeout"; ``a(b|c)`` only
+    guarantees "a".  Handing one of these to the block scanner lets a regex
+    filter skip the records it cannot possibly match.  When nothing is
+    guaranteed -- ``reset|expired`` -- the caller falls back to a full scan, so
+    an empty result is always safe.
+    """
+    if "(?i" in pattern or "(?m" in pattern or "(?s" in pattern:
+        return []  # inline flags could change how the literals match
+    try:
+        parsed = _re_parser.parse(pattern, flags)
+    except Exception:
+        return []
+    runs: list[str] = []
+    current: list[str] = []
+    _collect_literals(parsed, runs, current)
+    if current:
+        runs.append("".join(current))
+    return [run for run in runs if run]
+
+
+def _collect_literals(sequence, runs: list[str], current: list[str]) -> None:
+    def flush() -> None:
+        if current:
+            runs.append("".join(current))
+            current.clear()
+
+    for op, value in sequence:
+        if op is _re_constants.LITERAL:
+            current.append(chr(value))
+        elif op is _re_constants.AT:
+            continue  # anchors are zero width and never break a literal run
+        elif op is _re_constants.SUBPATTERN:
+            _group, add_flags, del_flags, subpattern = value
+            if add_flags or del_flags:
+                flush()
+                continue
+            _collect_literals(subpattern, runs, current)
+        elif op in (_re_constants.MAX_REPEAT, _re_constants.MIN_REPEAT):
+            minimum, _maximum, subpattern = value
+            if minimum >= 1:
+                # The final repetition is adjacent to whatever follows it, so
+                # the run continues through the body.
+                _collect_literals(subpattern, runs, current)
+            else:
+                flush()
+        else:
+            flush()
 
 
 def _prefilter_literals(table: Table, compiled: list["CompiledCondition"]) -> list[tuple[bytes, bool]]:
@@ -215,13 +274,24 @@ def _prefilter_literals(table: Table, compiled: list["CompiledCondition"]) -> li
         cond = c.cond
         if cond.negate or cond.op not in PREFILTERABLE or not cond.value:
             continue
-        if any(ch in cond.value for ch in specials):
-            continue
-        text = cond.value if cond.case_sensitive else cond.value.lower()
-        try:
-            literals.append((text.encode(encoding), cond.case_sensitive))
-        except (UnicodeEncodeError, LookupError):
-            continue
+        if cond.op == "regex":
+            flags = 0 if cond.case_sensitive else re.IGNORECASE
+            candidates = regex_literals(cond.value, flags)
+        else:
+            candidates = [cond.value]
+        for text in candidates:
+            if any(ch in text for ch in specials):
+                continue
+            # bytes.lower() only folds ASCII, so a case-insensitive literal has
+            # to be ASCII for the byte-level search to stay correct.
+            if not cond.case_sensitive:
+                if not text.isascii():
+                    continue
+                text = text.lower()
+            try:
+                literals.append((text.encode(encoding), cond.case_sensitive))
+            except (UnicodeEncodeError, LookupError):
+                continue
     return literals
 
 
@@ -231,9 +301,15 @@ def run_filter(
     match_all: bool = True,
     base_ids: Optional[Iterable[int]] = None,
     limit: Optional[int] = None,
+    workers: Optional[int] = 1,
     progress: Progress = None,
 ) -> array:
-    """Return the ids of rows matching ``conditions`` in display order."""
+    """Return the ids of rows matching ``conditions`` in display order.
+
+    ``workers`` may be a process count, or None to let the machine decide;
+    1 keeps everything in this process.
+    """
+    conditions = list(conditions)
     compiled = compile_conditions(table, conditions)
     out = array("q")
     if not compiled:
@@ -242,9 +318,20 @@ def run_filter(
         return out
     test = all if match_all else any
     if match_all and base_ids is None and table.can_stream_raw():
+        if workers != 1:
+            from .parallel import filter_parallel, plan_workers
+
+            count = plan_workers(table, workers)
+            if count > 1:
+                found = filter_parallel(
+                    table, conditions, count, match_all=match_all,
+                    limit=limit, progress=progress,
+                )
+                if found is not None:
+                    return found
         literals = _prefilter_literals(table, compiled)
-        if literals:
-            return _filter_by_literal(table, compiled, literals, limit, progress)
+        chosen = _pick_literal(table, literals) if literals else None
+        return scan_range(table, compiled, chosen, limit=limit, progress=progress)
     for rid, row in table.iter_all(ids=base_ids, progress=progress):
         if test(c.matches(row) for c in compiled):
             out.append(rid)
@@ -253,38 +340,86 @@ def run_filter(
     return out
 
 
-def _filter_by_literal(
+SELECTIVITY_LIMIT = 0.4  # a literal in most records is not worth searching for
+
+
+def _pick_literal(
+    table: Table, literals: list[tuple[bytes, bool]], start_rid: int = 0
+) -> Optional[tuple[bytes, bool]]:
+    """Choose the most selective literal, or None if none of them helps.
+
+    A literal that occurs in nearly every record (``host-0`` in a host column)
+    would make the block scan slower than a straight sequential parse, so it is
+    measured on the first block before committing to a strategy.
+    """
+    try:
+        _first_rid, _base, blob = next(iter(table.iter_blocks(start_rid)))
+    except StopIteration:
+        return None
+    average = max(1, table.index.size // max(1, table.row_count))
+    records = max(1, len(blob) // average)
+    lowered: Optional[bytes] = None
+    best: Optional[tuple[int, bytes, bool]] = None
+    for literal, case_sensitive in literals:
+        if case_sensitive:
+            hits = blob.count(literal)
+        else:
+            if lowered is None:
+                lowered = blob.lower()
+            hits = lowered.count(literal)
+        if best is None or hits < best[0]:
+            best = (hits, literal, case_sensitive)
+    if best is None or best[0] > SELECTIVITY_LIMIT * records:
+        return None
+    return best[1], best[2]
+
+
+def scan_range(
     table: Table,
     compiled: list[CompiledCondition],
-    literals: list[tuple[bytes, bool]],
-    limit: Optional[int],
-    progress: Progress,
+    chosen: Optional[tuple[bytes, bool]],
+    start_rid: int = 0,
+    stop_rid: Optional[int] = None,
+    limit: Optional[int] = None,
+    progress: Progress = None,
 ) -> array:
-    """Filter by searching whole blocks for a literal, parsing only the hits.
+    """Filter a row range straight off disk, block by block.
 
-    The literal must appear in a matching record, so records the search never
-    lands on cannot match and are never decoded.  On a multi-gigabyte log this
-    turns a per-row Python loop into a handful of C-level ``bytes.find`` calls.
+    With ``chosen`` the block bytes are searched for a literal and only the
+    records it lands on are parsed; without one every record in the block is
+    parsed.  Either way the work is bounded to ``[start_rid, stop_rid)``, which
+    is what lets several processes share one file.
     """
-    literal, case_sensitive = max(literals, key=lambda item: len(item[0]))
     out = array("q")
     offsets = table.index.offsets
     header = table.header_rows
-    for first_rid, base, blob in table.iter_blocks(progress=progress):
-        haystack = blob if case_sensitive else blob.lower()
-        pos = 0
-        rid = first_rid  # hits come in file order, so each search starts here
-        while True:
-            hit = haystack.find(literal, pos)
-            if hit < 0:
-                break
-            rid = table.row_at_offset(base + hit, lo=rid)
-            row = table.parse_bytes(blob[offsets[rid + header] - base : offsets[rid + header + 1] - base])
-            if all(c.matches(row) for c in compiled):
-                out.append(rid)
-                if limit and len(out) >= limit:
-                    return out
-            pos = offsets[rid + header + 1] - base  # continue after this record
+    for first_rid, base, blob in table.iter_blocks(start_rid, stop_rid, progress=progress):
+        if chosen is not None:
+            literal, case_sensitive = chosen
+            haystack = blob if case_sensitive else blob.lower()
+            pos = 0
+            rid = first_rid
+            while True:
+                hit = haystack.find(literal, pos)
+                if hit < 0:
+                    break
+                rid = table.row_at_offset(base + hit, lo=rid)
+                row = table.parse_bytes(
+                    blob[offsets[rid + header] - base : offsets[rid + header + 1] - base]
+                )
+                if all(c.matches(row) for c in compiled):
+                    out.append(rid)
+                    if limit and len(out) >= limit:
+                        return out
+                pos = offsets[rid + header + 1] - base  # continue after this record
+        else:
+            rid = first_rid
+            for row in table.parse_block(blob):
+                if all(c.matches(row) for c in compiled):
+                    out.append(rid)
+                    if limit and len(out) >= limit:
+                        return out
+                rid += 1
     return out
 
 

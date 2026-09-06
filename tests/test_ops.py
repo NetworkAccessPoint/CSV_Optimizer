@@ -32,6 +32,9 @@ class OpsTest(unittest.TestCase):
     def ids(self, *conditions, **kw):
         return list(ops.run_filter(self.table, list(conditions), **kw))
 
+    def all_ids(self):
+        return list(self.table.all_ids())
+
     def cond(self, col, op, value="", value2="", **kw):
         return ops.Condition(col=self.cid.get(col), op=op, value=value, value2=value2, **kw)
 
@@ -152,6 +155,46 @@ class OpsTest(unittest.TestCase):
         self.assertIsNotNone(ops.parse_timestamp("1767225600"))
         self.assertIsNotNone(ops.parse_timestamp("10/Oct/2026:13:55:36"))
         self.assertIsNone(ops.parse_timestamp("not a time"))
+
+    def test_regex_literal_extraction(self):
+        self.assertEqual(ops.regex_literals("ERROR.*timeout"), ["ERROR", "timeout"])
+        self.assertEqual(ops.regex_literals("user session (expired|reset)"), ["user session "])
+        self.assertEqual(ops.regex_literals(r"user:\d{5}"), ["user:"])
+        self.assertEqual(ops.regex_literals("(abc)+def"), ["abcdef"])
+        self.assertEqual(ops.regex_literals("(?:xy)?zz"), ["zz"])
+        self.assertEqual(ops.regex_literals("^ok$"), ["ok"])
+        self.assertEqual(ops.regex_literals("reset|expired"), [])   # nothing is mandatory
+        self.assertEqual(ops.regex_literals("(?i)abc"), [])          # inline flags: stay safe
+        self.assertEqual(ops.regex_literals("[a-z]+"), [])
+        self.assertEqual(ops.regex_literals("bad["), [])             # invalid pattern
+
+    def test_regex_filters_match_the_unaccelerated_path(self):
+        for pattern in ("connection reset", "connection.*peer", r"user:\d+",
+                        "reset|expired", "^ok$", "slow query"):
+            cond = self.cond("msg", "regex", pattern)
+            fast = self.ids(cond)
+            slow = self.ids(cond, base_ids=list(self.table.all_ids()))
+            self.assertEqual(fast, slow, pattern)
+
+    def test_case_insensitive_non_ascii_is_not_prefiltered(self):
+        path = os.path.join(self.dir.name, "accents.csv")
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write("id,city\n1,Ärger\n2,plain\n")
+        table = Table(path, use_cache=False)
+        city = table.columns[1].id
+        # 'Ä'.lower() is not reachable through bytes.lower(), so the literal must
+        # be rejected and the filter still has to find the row.
+        cond = ops.Condition(col=city, op="contains", value="ÄRGER")
+        self.assertEqual(list(ops.run_filter(table, [cond])), [0])
+        self.assertEqual(ops._prefilter_literals(table, ops.compile_conditions(table, [cond])), [])
+
+    def test_unselective_literal_falls_back_to_streaming(self):
+        # 'INFO' style values that appear in most records should not be used for
+        # the block scan; results must be identical either way.
+        cond = self.cond("service", "contains", "a")
+        fast = self.ids(cond)
+        slow = self.ids(cond, base_ids=list(self.table.all_ids()))
+        self.assertEqual(fast, slow)
 
     def test_dedupe_refuses_to_track_too_many_keys(self):
         with self.assertRaises(ValueError) as ctx:

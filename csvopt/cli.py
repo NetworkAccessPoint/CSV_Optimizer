@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import os
 import sys
 import time
@@ -53,9 +54,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         open_browser=not args.no_browser,
         verbose=args.verbose,
         use_cache=not args.no_cache,
+        workers=args.workers,
     )
-    print(f"csvopt {__version__} — {server.url}")
-    print("브라우저가 열리지 않으면 위 주소를 직접 붙여넣으세요. 종료하려면 Ctrl+C.")
+    # flush: a frozen build's stdout is block buffered when it is not a tty
+    print(f"csvopt {__version__} — {server.url}", flush=True)
+    print("브라우저가 열리지 않으면 위 주소를 직접 붙여넣으세요. 종료하려면 Ctrl+C.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -104,7 +107,10 @@ def cmd_grep(args: argparse.Namespace) -> int:
     table = Table(args.path, progress=_progress_printer("인덱싱"))
     _finish("인덱싱")
     conds = _conditions_from(args, table)
-    ids = run_filter(table, conds, match_all=not args.any, progress=_progress_printer("검색"))
+    ids = run_filter(
+        table, conds, match_all=not args.any, workers=args.workers,
+        progress=_progress_printer("검색"),
+    )
     _finish("검색")
     print(f"{len(ids):,}행이 일치했습니다.", file=sys.stderr)
     if args.output:
@@ -155,6 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-cache", action="store_true",
         help="인덱스 캐시(.csvidx)를 만들지 않음 (읽기 전용/네트워크 드라이브)",
     )
+    p_open.add_argument(
+        "--workers", type=int, default=None,
+        help="필터에 사용할 프로세스 수 (기본: 코어 수에 맞춰 자동, 1이면 단일 프로세스)",
+    )
     p_open.set_defaults(func=cmd_serve)
 
     p_info = sub.add_parser("info", help="파일 정보와 미리보기 출력")
@@ -170,6 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_grep.add_argument("-e", "--regex", help="모든 열에서 정규식 검색")
     p_grep.add_argument("--any", action="store_true", help="조건을 OR로 결합")
     p_grep.add_argument("-o", "--output", help="결과를 저장할 파일 (없으면 표준 출력)")
+    p_grep.add_argument(
+        "--workers", type=int, default=None,
+        help="사용할 프로세스 수 (기본: 자동, 1이면 단일 프로세스)",
+    )
     p_grep.set_defaults(func=cmd_grep)
 
     p_conv = sub.add_parser("convert", help="인코딩/구분자/줄바꿈 변환")
@@ -186,6 +200,7 @@ COMMANDS = ("open", "info", "grep", "convert")
 
 
 def main(argv: list[str] | None = None) -> int:
+    multiprocessing.freeze_support()  # required by frozen (PyInstaller) builds
     argv = list(sys.argv[1:] if argv is None else argv)
     # `csvopt app.csv` and `csvopt --port 9000 app.csv` both mean `csvopt open ...`.
     if not argv or (argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "--version")):

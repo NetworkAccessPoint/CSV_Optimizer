@@ -227,3 +227,11 @@ class StateStampTest(ServerCase):
         self.call("marks_clear")
         self.assertIn("count", embedded)
         self.assertGreater(self.call("state")["stamp"], second)
+
+
+class WorkerSettingTest(ServerCase):
+    def test_state_reports_the_planned_worker_count(self):
+        state = self.call("state")
+        self.assertIn("workers", state)
+        # The fixture file is tiny, so filtering stays in this process.
+        self.assertEqual(state["workers"], 1)

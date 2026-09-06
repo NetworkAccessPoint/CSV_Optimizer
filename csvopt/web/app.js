@@ -155,7 +155,9 @@
       return refreshState();
     }
     try {
-      const job = await runJob('filter', payload, '필터 적용 중');
+      const cores = (state.server && state.server.workers) || 1;
+      const job = await runJob(
+        'filter', payload, cores > 1 ? `필터 적용 중 · ${cores}코어` : '필터 적용 중');
       if (job.status === 'cancelled') say('필터를 취소했습니다.');
       else say(`${API.num(job.result.rows)}행이 조건에 맞습니다. (${job.elapsed.toFixed(1)}초)`);
       grid.invalidate();
@@ -527,7 +529,8 @@
         conditions: [condition],
         scope: $('#find-scope').checked ? 'view' : 'all',
         replace: !!replace,
-      }, '책갈피 표시 중');
+      }, (state.server.workers || 1) > 1
+        ? `책갈피 표시 중 · ${state.server.workers}코어` : '책갈피 표시 중');
       grid.invalidate();
       await refreshState(job.result.state);
       showTab('marks');

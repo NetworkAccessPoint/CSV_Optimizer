@@ -511,6 +511,15 @@ class Table:
             return row
         return []
 
+    def parse_block(self, blob: bytes) -> Iterator[list[str]]:
+        """Parse every record of a record-aligned block in one pass."""
+        text = blob.decode(self.dialect.encoding, "replace")
+        yield from csv.reader(
+            io.StringIO(text, newline=""),
+            delimiter=self.dialect.delimiter,
+            quotechar=self.dialect.quotechar,
+        )
+
     def parse_bytes(self, data: bytes) -> list[str]:
         """Parse one raw record.
 
@@ -658,6 +667,8 @@ class Table:
 
     def iter_blocks(
         self,
+        start_rid: int = 0,
+        stop_rid: Optional[int] = None,
         progress: Optional[Callable[[int, int], bool]] = None,
         chunk: int = 4 << 20,
     ) -> Iterator[tuple[int, int, bytes]]:
@@ -665,13 +676,17 @@ class Table:
 
         A block always ends on a record boundary, so a literal search over the
         block bytes can be mapped straight back to a row through the index.
+        Passing a row range lets several processes scan different parts of the
+        same file without stepping on each other.
         """
         offsets = self.index.offsets
         first = self.header_rows
-        last = len(self.index)
+        last = len(self.index) if stop_rid is None else min(
+            len(self.index), stop_rid + self.header_rows
+        )
         total = self.index.size
         with open(self.path, "rb") as fh:
-            row = first
+            row = max(first, start_rid + self.header_rows)
             while row < last:
                 start = offsets[row]
                 fh.seek(start)

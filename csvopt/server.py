@@ -15,6 +15,7 @@ import os
 import posixpath
 import secrets
 import string
+import sys
 import threading
 import webbrowser
 from array import array
@@ -27,7 +28,14 @@ from .index import Aborted
 from .jobs import Job, JobManager
 from .table import SaveError, Table
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+def _web_dir() -> str:
+    """Where the UI files live: next to this module, or inside the bundle."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, "csvopt", "web")
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+
+
+WEB_DIR = _web_dir()
 MAX_BODY = 64 * 1024 * 1024
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -35,12 +43,18 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 class Session:
     """Everything one running editor instance owns: a table and its jobs."""
 
-    def __init__(self, path: Optional[str] = None, use_cache: bool = True):
+    def __init__(
+        self,
+        path: Optional[str] = None,
+        use_cache: bool = True,
+        workers: Optional[int] = None,
+    ):
         self.lock = threading.RLock()
         self.jobs = JobManager()
         self.table: Optional[Table] = None
         self.error: str = ""
         self.use_cache = use_cache
+        self.workers = workers  # None = decide from the machine, 1 = single process
         self._stamp = 0
         if path:
             self.open(path)
@@ -85,6 +99,7 @@ class Session:
             "columns": [c.as_dict() for c in table.columns],
             "dialect": table.dialect.as_dict(),
             "index_mapped": table.index.mapped,
+            "workers": _planned_workers(table, self.workers),
             "dirty": table.dirty,
             "undo": len(table.undo_stack),
             "redo": len(table.redo_stack),
@@ -95,6 +110,16 @@ class Session:
             "marks": table.mark_count,
             "deleted_rows": table.seq.deleted_count,
         }
+
+
+def _planned_workers(table: Table, requested: Optional[int]) -> int:
+    """How many processes a filter would use right now (1 = single process)."""
+    from .parallel import plan_workers
+
+    try:
+        return plan_workers(table, requested)
+    except Exception:
+        return 1
 
 
 def _conditions(payload: dict) -> list[ops.Condition]:
@@ -297,7 +322,8 @@ class Api:
                     raise ValueError("검색어나 조건이 필요합니다")
                 base = list(table.view) if (scope_view and table.view is not None) else None
                 ids = ops.run_filter(
-                    table, conditions, match_all=match_all, base_ids=base, progress=job.progress
+                    table, conditions, match_all=match_all, base_ids=base,
+                    workers=self.session.workers, progress=job.progress,
                 )
                 if replace:
                     table.clear_marks()
@@ -371,7 +397,7 @@ class Api:
                     return {"rows": table.row_count, "filtered": False}
                 ids = ops.run_filter(
                     table, conditions, match_all=match_all, base_ids=base,
-                    progress=job.progress,
+                    workers=self.session.workers, progress=job.progress,
                 )
                 table.view = ids
                 table.view_label = label
@@ -723,8 +749,9 @@ def serve(
     open_browser: bool = True,
     verbose: bool = False,
     use_cache: bool = True,
+    workers: Optional[int] = None,
 ) -> CsvOptServer:
-    session = Session(path, use_cache=use_cache)
+    session = Session(path, use_cache=use_cache, workers=workers)
     token = secrets.token_urlsafe(24)
     server = CsvOptServer((host, port), session, token, verbose=verbose)
     url = f"http://{host}:{server.server_address[1]}/?t={token}"
