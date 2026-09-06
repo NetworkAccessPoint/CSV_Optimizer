@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Run the test suite
-        run: python -m unittest discover -s tests -t .
+        run: python tools/run_tests.py --timeout 240 --verbose
       - name: Run the worker-pool tests
         run: python tools/run_pool_tests.py
       - name: Smoke test the CLI
