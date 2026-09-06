@@ -87,3 +87,46 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StdioTest(unittest.TestCase):
+    """Windows pipes default to a legacy code page; Korean output must survive."""
+
+    def test_redirected_output_is_switched_to_utf8(self):
+        import io
+
+        from csvopt.cli import _configure_stdio
+
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp1252", newline="")
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = stream
+        try:
+            _configure_stdio()
+            print("경로      : C:\\logs\\app.csv")
+            stream.flush()
+        finally:
+            sys.stdout, sys.stderr = original_stdout, original_stderr
+        self.assertEqual(stream.encoding, "utf-8")
+        self.assertIn("경로", raw.getvalue().decode("utf-8"))
+
+    def test_info_output_survives_a_cp1252_stream(self):
+        import io
+
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = os.path.join(directory.name, "log.csv")
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(DATA)
+
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp1252", newline="")
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = stream
+        try:
+            code = main(["info", path])
+            stream.flush()
+        finally:
+            sys.stdout, sys.stderr = original_stdout, original_stderr
+        self.assertEqual(code, 0)
+        self.assertIn("인코딩", raw.getvalue().decode("utf-8"))

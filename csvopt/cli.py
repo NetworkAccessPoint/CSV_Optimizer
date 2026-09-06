@@ -20,6 +20,28 @@ from .ops import Condition, run_filter
 from .table import Table
 
 
+def _configure_stdio() -> None:
+    """Keep Korean output from killing the CLI on Windows.
+
+    A Windows console handles Unicode itself, but as soon as output is piped to
+    a file the stream falls back to the ANSI code page (cp1252, cp949 ...) and
+    printing Hangul raises UnicodeEncodeError.  Redirected output is therefore
+    forced to UTF-8, and anything unencodable degrades to a replacement
+    character instead of a traceback.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            if stream.isatty():
+                reconfigure(errors="replace")
+            else:
+                reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # already detached or not reconfigurable
+            pass
+
+
 def _progress_printer(label: str):
     last = [0.0]
 
@@ -201,6 +223,7 @@ COMMANDS = ("open", "info", "grep", "convert")
 
 def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()  # required by frozen (PyInstaller) builds
+    _configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     # `csvopt app.csv` and `csvopt --port 9000 app.csv` both mean `csvopt open ...`.
     if not argv or (argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "--version")):
