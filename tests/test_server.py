@@ -11,7 +11,9 @@ from csvopt.server import serve
 DATA = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,tail\n"
 
 
-class ServerTest(unittest.TestCase):
+class ServerCase(unittest.TestCase):
+    """Shared fixture: one server instance for every API test."""
+
     @classmethod
     def setUpClass(cls):
         cls.dir = tempfile.TemporaryDirectory()
@@ -50,6 +52,8 @@ class ServerTest(unittest.TestCase):
             threading.Event().wait(0.05)
         self.fail("job did not finish")
 
+
+class ServerTest(ServerCase):
     # ------------------------------------------------------------- security
 
     def test_requires_token(self):
@@ -145,3 +149,81 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BookmarkApiTest(ServerCase):
+    def setUp(self):
+        self.call("marks_clear")
+        self.call("clear_view")
+
+    def test_mark_toggle_and_rows_report_marks(self):
+        res = self.call("mark", rid=1)
+        self.assertTrue(res["marked"])
+        self.assertEqual(res["count"], 1)
+        self.assertEqual(self.call("rows", start=0, count=5)["marked"], [1])
+        self.assertFalse(self.call("mark", rid=1)["marked"])
+
+    def test_mark_search_marks_every_match(self):
+        cid = self.call("state")["columns"][1]["id"]
+        job = self.run_job("mark_search", conditions=[{"col": cid, "op": "equals", "value": "ERROR"}])
+        self.assertEqual(job["result"]["matched"], 1)
+        self.assertEqual(self.call("state")["marks"], 1)
+
+    def test_invert_and_clear(self):
+        self.call("mark", rid=0)
+        self.assertEqual(self.call("marks_invert")["count"], 2)
+        self.assertEqual(self.call("marks_clear")["count"], 0)
+
+    def test_marks_filter_shows_only_bookmarks(self):
+        self.call("mark", rid=2)
+        self.assertEqual(self.call("marks_filter")["rows"], 1)
+        self.assertEqual(self.call("rows", start=0, count=5)["rows"], [["3", "WARN", "tail"]])
+        self.call("clear_view")
+
+    def test_marks_navigation(self):
+        self.call("mark", rid=2)
+        self.assertEqual(self.call("marks_next", pos=0, forward=True)["pos"], 2)
+        self.assertEqual(self.call("marks_next", pos=2, forward=True)["pos"], 2)  # wraps to itself
+        self.call("marks_clear")
+        self.assertEqual(self.call("marks_next", pos=0, forward=True)["pos"], -1)
+
+    def test_delete_marked_and_undo(self):
+        self.call("mark", rid=0)
+        job = self.run_job("marks_delete", keep=False)
+        self.assertEqual(job["result"]["removed"], 1)
+        self.assertEqual(self.call("state")["rows"], 2)
+        self.call("undo")
+        self.assertEqual(self.call("state")["rows"], 3)
+
+    def test_delete_unmarked_keeps_bookmarks(self):
+        self.call("mark", rid=1)
+        job = self.run_job("marks_delete", keep=True)
+        self.assertEqual(job["result"]["removed"], 2)
+        self.assertEqual(self.call("rows", start=0, count=5)["rows"], [["2", "ERROR", "boom"]])
+        self.call("undo")
+        self.assertEqual(self.call("state")["rows"], 3)
+
+    def test_export_bookmarked_rows_only(self):
+        self.call("mark", rid=2)
+        out = os.path.join(self.dir.name, "marks.csv")
+        job = self.run_job("save_as", path=out, scope="marks")
+        self.assertEqual(job["result"]["written"], 1)
+        with open(out, encoding="utf-8", newline="") as fh:
+            self.assertEqual(fh.read(), "ts,level,msg\n3,WARN,tail\n")
+
+    def test_export_without_bookmarks_is_reported(self):
+        out = os.path.join(self.dir.name, "empty.csv")
+        job = self.run_job("save_as", path=out, scope="marks")
+        self.assertEqual(job["status"], "error")
+        self.assertIn("책갈피", job["error"])
+
+
+class StateStampTest(ServerCase):
+    def test_every_state_snapshot_has_an_increasing_stamp(self):
+        first = self.call("state")["stamp"]
+        second = self.call("state")["stamp"]
+        self.assertGreater(second, first)
+        embedded = self.call("mark", rid=0)
+        self.call("marks_clear")
+        self.assertIn("count", embedded)
+        self.assertGreater(self.call("state")["stamp"], second)

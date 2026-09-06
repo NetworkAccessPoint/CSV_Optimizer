@@ -52,6 +52,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         port=args.port,
         open_browser=not args.no_browser,
         verbose=args.verbose,
+        use_cache=not args.no_cache,
     )
     print(f"csvopt {__version__} — {server.url}")
     print("브라우저가 열리지 않으면 위 주소를 직접 붙여넣으세요. 종료하려면 Ctrl+C.")
@@ -150,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_open.add_argument("--host", default="127.0.0.1", help="바인드 주소 (기본: 127.0.0.1)")
     p_open.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
     p_open.add_argument("-v", "--verbose", action="store_true", help="요청 로그 출력")
+    p_open.add_argument(
+        "--no-cache", action="store_true",
+        help="인덱스 캐시(.csvidx)를 만들지 않음 (읽기 전용/네트워크 드라이브)",
+    )
     p_open.set_defaults(func=cmd_serve)
 
     p_info = sub.add_parser("info", help="파일 정보와 미리보기 출력")

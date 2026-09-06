@@ -153,6 +153,11 @@ class OpsTest(unittest.TestCase):
         self.assertIsNotNone(ops.parse_timestamp("10/Oct/2026:13:55:36"))
         self.assertIsNone(ops.parse_timestamp("not a time"))
 
+    def test_dedupe_refuses_to_track_too_many_keys(self):
+        with self.assertRaises(ValueError) as ctx:
+            ops.dedupe(self.table, max_keys=2)
+        self.assertIn("중복 검사", str(ctx.exception))
+
     def test_filter_over_edited_rows_uses_overlay(self):
         self.table.set_cells([(0, self.cid["level"], "ERROR")])
         self.assertFalse(self.table.can_stream_raw())

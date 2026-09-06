@@ -244,26 +244,47 @@ def run_filter(
     if match_all and base_ids is None and table.can_stream_raw():
         literals = _prefilter_literals(table, compiled)
         if literals:
-            cs = [lit for lit, sensitive in literals if sensitive]
-            ci = [lit for lit, sensitive in literals if not sensitive]
-            for rid, raw in table.iter_raw(progress=progress):
-                if any(lit not in raw for lit in cs):
-                    continue
-                if ci:
-                    low = raw.lower()
-                    if any(lit not in low for lit in ci):
-                        continue
-                row = table.parse_bytes(raw)
-                if all(c.matches(row) for c in compiled):
-                    out.append(rid)
-                    if limit and len(out) >= limit:
-                        break
-            return out
+            return _filter_by_literal(table, compiled, literals, limit, progress)
     for rid, row in table.iter_all(ids=base_ids, progress=progress):
         if test(c.matches(row) for c in compiled):
             out.append(rid)
             if limit and len(out) >= limit:
                 break
+    return out
+
+
+def _filter_by_literal(
+    table: Table,
+    compiled: list[CompiledCondition],
+    literals: list[tuple[bytes, bool]],
+    limit: Optional[int],
+    progress: Progress,
+) -> array:
+    """Filter by searching whole blocks for a literal, parsing only the hits.
+
+    The literal must appear in a matching record, so records the search never
+    lands on cannot match and are never decoded.  On a multi-gigabyte log this
+    turns a per-row Python loop into a handful of C-level ``bytes.find`` calls.
+    """
+    literal, case_sensitive = max(literals, key=lambda item: len(item[0]))
+    out = array("q")
+    offsets = table.index.offsets
+    header = table.header_rows
+    for first_rid, base, blob in table.iter_blocks(progress=progress):
+        haystack = blob if case_sensitive else blob.lower()
+        pos = 0
+        rid = first_rid  # hits come in file order, so each search starts here
+        while True:
+            hit = haystack.find(literal, pos)
+            if hit < 0:
+                break
+            rid = table.row_at_offset(base + hit, lo=rid)
+            row = table.parse_bytes(blob[offsets[rid + header] - base : offsets[rid + header + 1] - base])
+            if all(c.matches(row) for c in compiled):
+                out.append(rid)
+                if limit and len(out) >= limit:
+                    return out
+            pos = offsets[rid + header + 1] - base  # continue after this record
     return out
 
 
@@ -451,9 +472,15 @@ def dedupe(
     table: Table,
     col_ids: Optional[list[int]] = None,
     ids: Optional[Iterable[int]] = None,
+    max_keys: int = 5_000_000,
     progress: Progress = None,
 ) -> list[int]:
-    """Row ids whose key (all columns, or the given ones) was already seen."""
+    """Row ids whose key (all columns, or the given ones) was already seen.
+
+    Duplicate detection has to remember every distinct key, so it is capped:
+    on a hundred-million-row log the caller is told to narrow the view instead
+    of watching the process run out of memory.
+    """
     if col_ids:
         idxs = [table.column_index(c) for c in col_ids]
         idxs = [i for i in idxs if i >= 0]
@@ -466,6 +493,11 @@ def dedupe(
         if key in seen:
             dupes.append(rid)
         else:
+            if len(seen) >= max_keys:
+                raise ValueError(
+                    f"중복 검사는 서로 다른 값 {max_keys:,}개까지만 지원합니다. "
+                    "필터로 범위를 좁힌 뒤 다시 실행하세요."
+                )
             seen.add(key)
     return dupes
 

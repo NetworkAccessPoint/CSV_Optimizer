@@ -200,19 +200,38 @@ if __name__ == "__main__":
 
 
 class RawStreamTest(TempFileTest):
-    def test_iter_raw_matches_parsed_rows_across_chunk_sizes(self):
+    def _wide_table(self, rows=300):
         path = os.path.join(self.dir.name, "wide.csv")
         with open(path, "w", encoding="utf-8", newline="") as fh:
             fh.write("a,b\n")
-            for i in range(300):
-                fh.write(f'{i},"x{"y" * (i % 29)}\nz"\n')  # embedded newlines, varying length
-        table = Table(path, use_cache=False)
+            for i in range(rows):
+                fh.write(f'{i},"x{"y" * (i % 29)}\nz"\n')  # embedded newline, varying length
+        return Table(path, use_cache=False)
+
+    def test_blocks_cover_every_record_exactly_once(self):
+        table = self._wide_table()
         expected = [row for _rid, row in table.iter_all()]
+        offsets = table.index.offsets
+        header = table.header_rows
         for chunk in (16, 64, 4096, 1 << 20):
-            parsed = [table.parse_bytes(raw) for _rid, raw in table.iter_raw(chunk=chunk)]
-            ids = [rid for rid, _raw in table.iter_raw(chunk=chunk)]
-            self.assertEqual(parsed, expected, f"chunk={chunk}")
+            ids, parsed = [], []
+            for first_rid, base, blob in table.iter_blocks(chunk=chunk):
+                rid = first_rid
+                while rid + header + 1 < len(offsets) and offsets[rid + header + 1] - base <= len(blob):
+                    start = offsets[rid + header] - base
+                    parsed.append(table.parse_bytes(blob[start : offsets[rid + header + 1] - base]))
+                    ids.append(rid)
+                    rid += 1
             self.assertEqual(ids, list(range(300)), f"chunk={chunk}")
+            self.assertEqual(parsed, expected, f"chunk={chunk}")
+
+    def test_row_at_offset_maps_bytes_back_to_rows(self):
+        table = self._wide_table()
+        offsets = table.index.offsets
+        for rid in (0, 1, 17, 299):
+            start, end = offsets[rid + 1], offsets[rid + 2]  # header excluded
+            self.assertEqual(table.row_at_offset(start), rid)
+            self.assertEqual(table.row_at_offset(end - 1), rid)
 
     def test_can_stream_raw_turns_off_after_an_edit(self):
         table = self.table()
@@ -221,3 +240,146 @@ class RawStreamTest(TempFileTest):
         self.assertFalse(table.can_stream_raw())
         table.undo()
         self.assertTrue(table.can_stream_raw())
+
+
+class BookmarkTest(TempFileTest):
+    def marked(self, table):
+        return list(table.iter_marked())
+
+    def test_mark_toggle_and_count(self):
+        table = self.table()
+        self.assertTrue(table.set_mark(1))
+        self.assertTrue(table.is_marked(1))
+        self.assertEqual(table.mark_count, 1)
+        self.assertFalse(table.set_mark(1))
+        self.assertEqual(table.mark_count, 0)
+        table.set_mark(2, True)
+        table.set_mark(2, True)
+        self.assertEqual(table.mark_count, 1)
+
+    def test_mark_ids_from_a_search(self):
+        from csvopt import ops
+
+        table = self.table()
+        level = table.columns[1].id
+        ids = ops.run_filter(table, [ops.Condition(col=level, op="equals", value="INFO")])
+        self.assertEqual(table.mark_ids(ids), 2)
+        self.assertEqual(self.marked(table), [0, 3])
+
+    def test_invert_marks(self):
+        table = self.table()
+        table.mark_ids([0, 2])
+        table.invert_marks()
+        self.assertEqual(self.marked(table), [1, 3])
+
+    def test_navigation_wraps(self):
+        table = self.table()
+        table.mark_ids([1, 3])
+        self.assertEqual(table.find_mark(0), 1)
+        self.assertEqual(table.find_mark(1), 3)
+        self.assertEqual(table.find_mark(3), 1)          # wraps forward
+        self.assertEqual(table.find_mark(0, forward=False), 3)  # wraps backward
+        table.clear_marks()
+        self.assertEqual(table.find_mark(0), -1)
+
+    def test_delete_marked_rows_and_undo(self):
+        table = self.table()
+        table.mark_ids([1, 2])
+        self.assertEqual(table.delete_marked(), 2)
+        self.assertEqual(table.row_count, 2)
+        self.assertEqual(self.rows(table), [["1", "INFO", "hello"], ["4", "INFO", "tail"]])
+        self.assertEqual(table.mark_count, 0)
+        table.undo()
+        self.assertEqual(table.row_count, 4)
+        self.assertEqual(table.mark_count, 2)
+        table.redo()
+        self.assertEqual(table.row_count, 2)
+
+    def test_delete_unmarked_rows_keeps_only_bookmarks(self):
+        table = self.table()
+        table.mark_ids([0, 3])
+        self.assertEqual(table.delete_marked(keep=True), 2)
+        self.assertEqual(self.rows(table), [["1", "INFO", "hello"], ["4", "INFO", "tail"]])
+        self.assertEqual(table.mark_count, 2)
+        table.undo()
+        self.assertEqual(table.row_count, 4)
+
+    def test_marks_survive_edits_and_follow_inserted_rows(self):
+        table = self.table()
+        rid = table.insert_row(1, ["9", "DEBUG", "new"])
+        table.set_mark(rid)
+        self.assertEqual(table.mark_count, 1)
+        self.assertEqual(self.marked(table), [rid])
+        table.invert_marks()
+        self.assertNotIn(rid, self.marked(table))
+        self.assertEqual(len(self.marked(table)), 4)
+
+    def test_deleting_a_row_clears_its_bookmark(self):
+        table = self.table()
+        table.mark_ids([2])
+        table.delete_rows([2])
+        self.assertEqual(table.mark_count, 0)
+
+    def test_saving_writes_only_kept_rows_after_bulk_delete(self):
+        table = self.table()
+        table.mark_ids([1])
+        table.delete_marked(keep=True)
+        out = os.path.join(self.dir.name, "kept.csv")
+        self.assertEqual(table.write_to(out), 1)
+        with open(out, encoding="utf-8", newline="") as fh:
+            self.assertEqual(fh.read(), "ts,level,msg\n2,ERROR,boom\n")
+
+
+class BulkSequenceTest(unittest.TestCase):
+    def test_bitset_backed_sequence_handles_mass_deletion(self):
+        from csvopt.bitset import Bitset
+
+        seq = RowSequence(100000)
+        keep = Bitset(100000)
+        keep.update(range(0, 100000, 1000))
+        removed = seq.keep_where(keep)
+        self.assertEqual(removed, 100000 - 100)
+        self.assertEqual(seq.count, 100)
+        self.assertEqual(seq.at(0), 0)
+        self.assertEqual(seq.at(99), 99000)
+        self.assertEqual(seq.slice(50, 3), [50000, 51000, 52000])
+        self.assertEqual(seq.position_of(52000), 52)
+        self.assertEqual(list(seq.iter_ids())[:3], [0, 1000, 2000])
+
+    def test_snapshot_restores_previous_shape(self):
+        from csvopt.bitset import Bitset
+
+        seq = RowSequence(5000)
+        seq.delete(10)
+        seq.insert_after(20, -2)
+        before = seq.snapshot()
+        marks = Bitset(5000)
+        marks.update(range(0, 5000, 2))
+        seq.delete_where(marks)
+        # 2499 further rows deleted (row 10 was already gone) plus the inserted
+        # row, which survives its anchor being deleted.
+        self.assertEqual(seq.count, 2501)
+        seq.restore(before)
+        self.assertEqual(seq.count, 5000)          # 5000 - 1 deleted + 1 inserted
+        self.assertEqual(seq.at(19), 20)   # row 10 is gone, so rows shift up by one
+        self.assertEqual(seq.at(20), -2)   # the inserted row follows its anchor
+        self.assertTrue(seq.is_deleted(10))
+
+
+class DiskGuardTest(TempFileTest):
+    def test_save_refuses_when_the_disk_is_full(self):
+        import shutil as _shutil
+        from collections import namedtuple
+
+        from csvopt.table import SaveError
+
+        usage = namedtuple("usage", "total used free")
+        table = self.table()
+        original = _shutil.disk_usage
+        _shutil.disk_usage = lambda _path: usage(total=1, used=1, free=0)
+        try:
+            with self.assertRaises(SaveError) as ctx:
+                table.write_to(os.path.join(self.dir.name, "out.csv"))
+        finally:
+            _shutil.disk_usage = original
+        self.assertIn("공간", str(ctx.exception))

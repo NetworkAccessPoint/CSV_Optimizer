@@ -88,14 +88,37 @@
             <button id="find-run" class="btn small">찾기</button>
             <button id="find-prev" class="btn small ghost">◀</button>
             <button id="find-next" class="btn small ghost">▶</button>
+            <button id="find-mark" class="btn small">모두 책갈피</button>
             <button id="find-replace" class="btn small danger">모두 바꾸기</button>
           </div>
           <div id="find-out" class="muted"></div>
         </div>
         <div data-panel="marks" class="panel hidden">
-          <div class="row"><button id="mark-clear" class="btn small ghost">모두 지우기</button>
-            <span class="muted">행에서 <b>M</b> 키로 북마크</span></div>
-          <div id="mark-list" class="marks"></div>
+          <div class="row">
+            <b id="mark-count">0</b><span class="muted">개 책갈피</span>
+            <span class="spacer"></span>
+            <button id="mark-prev" class="btn small ghost" title="이전 책갈피 (Shift+F2)">◀</button>
+            <button id="mark-next" class="btn small ghost" title="다음 책갈피 (F2)">▶</button>
+          </div>
+          <div class="row wrap">
+            <button id="mark-search" class="btn small">검색어로 모두 책갈피</button>
+            <button id="mark-invert" class="btn small">책갈피 반전</button>
+            <button id="mark-clear" class="btn small ghost">모두 해제</button>
+          </div>
+          <div class="row wrap">
+            <button id="mark-only" class="btn small">책갈피만 보기</button>
+            <button id="mark-export" class="btn small">책갈피만 내보내기</button>
+          </div>
+          <div class="row wrap">
+            <button id="mark-del" class="btn small danger">책갈피 행 삭제</button>
+            <button id="mark-keep" class="btn small danger">책갈피 외 행 삭제</button>
+          </div>
+          <div class="muted">
+            현재 행 책갈피는 <kbd>M</kbd> 또는 <kbd>Ctrl+F2</kbd>,
+            이동은 <kbd>F2</kbd> / <kbd>Shift+F2</kbd> 입니다.
+            삭제는 저장 전까지 <kbd>Ctrl+Z</kbd>로 되돌릴 수 있습니다.
+          </div>
+          <div id="mark-hint" class="muted"></div>
         </div>
         <div data-panel="cols" class="panel hidden">
           <div class="row"><button id="col-add" class="btn small">+ 열 추가</button>

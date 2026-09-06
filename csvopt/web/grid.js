@@ -90,7 +90,12 @@
       this.layout();
     }
 
-    invalidate() { this.cache.clear(); this.pending.clear(); this.render(); }
+    invalidate() {
+      this.cache.clear();
+      this.pending.clear();
+      this.marks.clear();   // bookmark state is re-sent with every page
+      this.render();
+    }
 
     setRowHeight(px, wrap) {
       this.rowH = px;
@@ -169,6 +174,11 @@
           this.cache.set(c, {
             start: start, rows: data.rows, ids: data.ids, edited: data.edited || {},
           });
+          const marked = new Set(data.marked || []);
+          for (const id of data.ids) {
+            if (marked.has(id)) this.marks.add(id);
+            else this.marks.delete(id);
+          }
           if (!this.autoFitted && data.rows.length) {
             this.autoFitted = true;
             this.autoFitAll(data.rows);
@@ -474,8 +484,8 @@
       this.editing = null;
     }
 
-    toggleMark(id) {
-      if (this.marks.has(id)) this.marks.delete(id); else this.marks.add(id);
+    setMark(id, on) {
+      if (on) this.marks.add(id); else this.marks.delete(id);
       this.render();
     }
   }

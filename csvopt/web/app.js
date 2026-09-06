@@ -60,6 +60,9 @@
 
   async function refreshState(data) {
     const st = data || (await API.call('state'));
+    // Replies can arrive out of order (a long job finishing after a quick
+    // call); never let an older snapshot overwrite a newer one.
+    if (state.server && st.stamp && state.server.stamp > st.stamp) return state.server;
     state.server = st;
     if (!st.open) {
       $('#empty').classList.remove('hidden');
@@ -88,6 +91,7 @@
     grid.setTotal(st.rows);
     fillColumnSelects();
     renderColumnPanel();
+    renderMarks();
     return st;
   }
 
@@ -465,28 +469,111 @@
     ]);
   }
 
+  /* ------------------------------------------------------------ bookmarks
+
+     Modelled on Notepad++: search marks every matching line, and the marks can
+     then be inverted, jumped between, kept or removed in bulk. */
+
   function renderMarks() {
-    const box = $('#mark-list');
-    box.innerHTML = '';
-    if (!grid.marks.size) {
-      box.appendChild(el('div', 'muted', '북마크가 없습니다.'));
+    const count = (state.server && state.server.marks) || 0;
+    $('#mark-count').textContent = API.num(count);
+    const disabled = count === 0;
+    ['#mark-prev', '#mark-next', '#mark-only', '#mark-export', '#mark-del', '#mark-keep']
+      .forEach((sel) => { $(sel).disabled = disabled; });
+    $('#mark-hint').textContent = disabled
+      ? '검색 결과를 한 번에 책갈피로 남기려면 찾기 패널에서 "모두 책갈피"를 누르세요.'
+      : '';
+  }
+
+  async function toggleMark(pos) {
+    const row = grid.rowAt(pos == null ? grid.cursor.r : pos);
+    if (!row) return;
+    try {
+      const res = await API.call('mark', { rid: row.id });
+      grid.setMark(row.id, res.marked);
+      state.server.marks = res.count;
+      renderMarks();
+    } catch (err) { fail(err); }
+  }
+
+  async function gotoMark(forward) {
+    if (!state.server.marks) { say('책갈피가 없습니다.'); return; }
+    try {
+      const res = await API.call('marks_next', { pos: grid.cursor.r, forward: forward });
+      if (res.pos < 0) { say('책갈피를 찾지 못했습니다.'); return; }
+      grid.setCursor(res.pos, grid.cursor.c, false);
+      grid.scrollToRow(res.pos, 'center');
+    } catch (err) { fail(err); }
+  }
+
+  /* Mark every row matching the find panel's search -- "Mark All". */
+  async function markSearch(replace) {
+    const needle = $('#find-needle').value.trim() || $('#quick').value.trim();
+    if (!needle) {
+      showTab('find');
+      $('#find-needle').focus();
+      say('책갈피로 남길 검색어를 입력하세요.');
       return;
     }
-    [...grid.marks].forEach((rid) => {
-      const row = el('div');
-      const jump = el('span', 'jump', rid < 0 ? '새 행' : '행 ' + API.num(rid + 1));
-      jump.onclick = async () => {
-        const pos = await API.call('position', { rid: rid });
-        if (pos.pos >= 0) { grid.setCursor(pos.pos, grid.cursor.c, false); grid.scrollToRow(pos.pos, 'center'); }
-        else say('현재 필터 결과에 없는 행입니다.');
-      };
-      const del = el('button', 'btn tiny ghost', '✕');
-      del.onclick = () => { grid.marks.delete(rid); renderMarks(); grid.render(); };
-      row.appendChild(jump);
-      row.appendChild(el('span', 'spacer'));
-      row.appendChild(del);
-      box.appendChild(row);
-    });
+    const cid = $('#find-col').value ? +$('#find-col').value : null;
+    const condition = {
+      col: cid,
+      op: $('#find-regex').checked ? 'regex' : ($('#find-whole').checked ? 'equals' : 'contains'),
+      value: needle,
+      case_sensitive: $('#find-case').checked,
+    };
+    try {
+      const job = await runJob('mark_search', {
+        conditions: [condition],
+        scope: $('#find-scope').checked ? 'view' : 'all',
+        replace: !!replace,
+      }, '책갈피 표시 중');
+      grid.invalidate();
+      await refreshState(job.result.state);
+      showTab('marks');
+      say(`${API.num(job.result.matched)}행을 책갈피로 표시했습니다.`);
+    } catch (err) { fail(err); }
+  }
+
+  async function marksSimple(endpoint, message) {
+    try {
+      const res = await API.call(endpoint);
+      grid.invalidate();
+      await refreshState(res.state);
+      if (message) say(message(res));
+    } catch (err) { fail(err); }
+  }
+
+  async function marksOnly() {
+    try {
+      const res = await API.call('marks_filter');
+      state.filters = [];
+      renderChips();
+      grid.invalidate();
+      grid.setCursor(0, grid.cursor.c, false);
+      await refreshState(res.state);
+      say(`책갈피 ${API.num(res.rows)}행만 표시합니다.`);
+    } catch (err) { fail(err); }
+  }
+
+  function marksDelete(keep) {
+    const count = state.server.marks || 0;
+    const body = el('div');
+    body.appendChild(el('p', null, keep
+      ? `책갈피 ${API.num(count)}행만 남기고 나머지를 모두 삭제합니다.`
+      : `책갈피로 표시된 ${API.num(count)}행을 삭제합니다.`));
+    body.appendChild(el('p', 'muted', `저장하기 전까지 원본 파일은 그대로이며, ${MOD}+Z로 되돌릴 수 있습니다.`));
+    modal(keep ? '책갈피 외 행 삭제' : '책갈피 행 삭제', body, [
+      { label: '취소' },
+      { label: '삭제', primary: true, action: async () => {
+        try {
+          const job = await runJob('marks_delete', { keep: keep }, '행 삭제 중');
+          grid.invalidate();
+          await refreshState(job.result.state);
+          say(`${API.num(job.result.removed)}행을 삭제했습니다. (${MOD}+Z로 취소)`);
+        } catch (err) { fail(err); }
+      } },
+    ]);
   }
 
   /* --------------------------------------------------------- context menu */
@@ -537,7 +624,15 @@
       { label: '선택한 행 복제', action: () => duplicateRows(ids) },
       { label: `선택한 ${ids.length}행 삭제`, key: MOD + '+-', action: () => deleteRows(ids) },
       '-',
-      { label: '북마크 토글', key: 'M', action: () => { const row = grid.rowAt(hit.r); if (row) { grid.toggleMark(row.id); renderMarks(); } } },
+      { label: '책갈피 토글', key: 'M', action: () => toggleMark(hit.r) },
+      { label: '이 값으로 모두 책갈피', action: async () => {
+        const row = grid.rowAt(hit.r);
+        if (!row) return;
+        $('#find-needle').value = row.cells[hit.c];
+        $('#find-col').value = String(col.id);
+        $('#find-whole').checked = true;
+        markSearch(false);
+      } },
     ]);
   }
 
@@ -726,6 +821,10 @@
       { label: '행 삽입 (커서 위)', action: () => insertRow(grid.cursor.r) },
       { label: '선택 행 삭제', action: () => deleteRows(grid.selectedRowIds()) },
       '-',
+      { label: '검색어로 모두 책갈피', key: '', action: () => markSearch(false) },
+      { label: '책갈피 행 삭제', action: () => marksDelete(false) },
+      { label: '책갈피 외 행 삭제', action: () => marksDelete(true) },
+      '-',
       { label: '중복 행 제거…', action: dedupeDialog },
       { label: '공백 다듬기 (선택 열)', action: async () => {
         try {
@@ -800,7 +899,8 @@
     add(MOD + '+G', '행으로 이동');
     add(MOD + '+S', '저장');
     add(MOD + '+O', '파일 열기');
-    add('M', '북마크 토글');
+    add('M, ' + MOD + '+F2', '책갈피 토글');
+    add('F2 / Shift+F2', '다음 / 이전 책갈피');
     add('PageUp / PageDown', '한 화면 이동');
     add(MOD + '+Home / End', '처음 / 마지막 행');
     body.appendChild(box);
@@ -839,12 +939,14 @@
     ]);
   }
 
-  function saveAsDialog() {
+  function saveAsDialog(scope) {
     const st = state.server;
+    const marksOnly = scope === 'marks';
     const body = el('div');
     const path = el('input');
     const dot = st.path.lastIndexOf('.');
-    path.value = (dot > 0 ? st.path.slice(0, dot) : st.path) + '_edited' + (dot > 0 ? st.path.slice(dot) : '.csv');
+    const suffix = marksOnly ? '_bookmarks' : '_edited';
+    path.value = (dot > 0 ? st.path.slice(0, dot) : st.path) + suffix + (dot > 0 ? st.path.slice(dot) : '.csv');
     const enc = el('select');
     [['', '원본과 동일 (' + st.dialect.encoding + ')'],
      ['utf-8-sig', 'UTF-8 (BOM 포함 · Excel 권장)'],
@@ -875,18 +977,24 @@
     body.appendChild(field('인코딩', enc, 'Excel에서 한글이 깨지면 UTF-8(BOM) 또는 CP949를 고르세요.'));
     body.appendChild(field('구분자', delim));
     body.appendChild(field('줄바꿈', nl));
-    const vo = el('label', 'chk');
-    vo.appendChild(viewOnly);
-    vo.appendChild(document.createTextNode(
-      st.view ? ` 현재 필터 결과 ${API.num(st.view_rows)}행만 저장` : ' 현재 필터 결과만 저장 (필터 없음)'));
-    body.appendChild(vo);
+    if (marksOnly) {
+      body.appendChild(el('p', 'muted', `책갈피로 표시된 ${API.num(st.marks || 0)}행만 저장합니다.`));
+    } else {
+      const vo = el('label', 'chk');
+      vo.appendChild(viewOnly);
+      vo.appendChild(document.createTextNode(
+        st.view ? ` 현재 필터 결과 ${API.num(st.view_rows)}행만 저장` : ' 현재 필터 결과만 저장 (필터 없음)'));
+      body.appendChild(vo);
+    }
 
-    modal('다른 이름으로 저장 · 내보내기', body, [
+    modal(marksOnly ? '책갈피 행 내보내기' : '다른 이름으로 저장 · 내보내기', body, [
       { label: '취소' },
       { label: '저장', primary: true, action: async () => {
         try {
           const job = await runJob('save_as', {
-            path: path.value, view_only: viewOnly.checked, encoding: enc.value,
+            path: path.value,
+            scope: marksOnly ? 'marks' : (viewOnly.checked ? 'view' : 'all'),
+            encoding: enc.value,
             delimiter: delim.value, newline: nl.value,
           }, '내보내는 중');
           say(`${API.num(job.result.written)}행을 ${job.result.path} 에 저장했습니다.`);
@@ -926,14 +1034,17 @@
       case 'PageUp': e.preventDefault(); grid.moveCursor(-(grid.visibleCount() - 3), 0, e.shiftKey); break;
       case 'Home': e.preventDefault(); mod ? grid.setCursor(0, 0, e.shiftKey) : grid.setCursor(grid.cursor.r, 0, e.shiftKey); break;
       case 'End': e.preventDefault(); mod ? grid.setCursor(grid.total - 1, grid.columns.length - 1, e.shiftKey) : grid.setCursor(grid.cursor.r, grid.columns.length - 1, e.shiftKey); break;
-      case 'Enter': case 'F2': e.preventDefault(); grid.beginEdit(grid.cursor.r, grid.cursor.c); break;
+      case 'Enter': e.preventDefault(); grid.beginEdit(grid.cursor.r, grid.cursor.c); break;
+      case 'F2':
+        e.preventDefault();
+        if (mod) toggleMark();
+        else gotoMark(!e.shiftKey);
+        break;
       case 'Delete': case 'Backspace': e.preventDefault(); clearSelection(); break;
       case 'Escape': grid.cancelEdit(); break;
-      case 'm': case 'M': {
-        const row = grid.rowAt(grid.cursor.r);
-        if (row) { grid.toggleMark(row.id); renderMarks(); }
+      case 'm': case 'M':
+        toggleMark();
         break;
-      }
       case '?': helpDialog(); break;
       default:
         if (!mod && !e.altKey && key.length === 1) {
@@ -1008,7 +1119,7 @@
     $('#btn-undo').onclick = undo;
     $('#btn-redo').onclick = redo;
     $('#btn-save').onclick = save;
-    $('#btn-saveas').onclick = saveAsDialog;
+    $('#btn-saveas').onclick = () => saveAsDialog();
     $('#btn-help').onclick = helpDialog;
     $('#btn-tools').onclick = toolsMenu;
     $('#btn-find').onclick = () => { showTab('find'); $('#find-needle').focus(); };
@@ -1027,7 +1138,17 @@
     $('#find-prev').onclick = () => gotoHit(-1);
     $('#find-replace').onclick = replaceAll;
     $('#find-needle').addEventListener('keydown', (e) => { if (e.key === 'Enter') runFind(); });
-    $('#mark-clear').onclick = () => { grid.marks.clear(); renderMarks(); grid.render(); };
+    $('#find-mark').onclick = () => markSearch(false);
+    $('#mark-search').onclick = () => markSearch(false);
+    $('#mark-invert').onclick = () => marksSimple('marks_invert',
+      (res) => `책갈피를 반전했습니다: ${API.num(res.count)}행`);
+    $('#mark-clear').onclick = () => marksSimple('marks_clear', () => '책갈피를 모두 해제했습니다.');
+    $('#mark-only').onclick = marksOnly;
+    $('#mark-export').onclick = () => saveAsDialog('marks');
+    $('#mark-del').onclick = () => marksDelete(false);
+    $('#mark-keep').onclick = () => marksDelete(true);
+    $('#mark-prev').onclick = () => gotoMark(false);
+    $('#mark-next').onclick = () => gotoMark(true);
     $('#col-add').onclick = () => addColumn(null);
     $('#col-showall').onclick = () => { grid.columns.forEach((c) => { c.hidden = false; }); grid.renderHeader(); renderColumnPanel(); };
     $('#job-cancel').onclick = () => { if (state.activeJob) API.cancel(state.activeJob); };

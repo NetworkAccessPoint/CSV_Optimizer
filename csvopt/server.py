@@ -35,17 +35,21 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 class Session:
     """Everything one running editor instance owns: a table and its jobs."""
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: Optional[str] = None, use_cache: bool = True):
         self.lock = threading.RLock()
         self.jobs = JobManager()
         self.table: Optional[Table] = None
         self.error: str = ""
+        self.use_cache = use_cache
+        self._stamp = 0
         if path:
             self.open(path)
 
     def open(self, path: str) -> Table:
         with self.lock:
-            self.table = Table(path)
+            if self.table is not None:
+                self.table.close()
+            self.table = Table(path, use_cache=self.use_cache)
             self.error = ""
             return self.table
 
@@ -55,11 +59,22 @@ class Session:
         return self.table
 
     def state(self) -> dict:
+        """A snapshot of everything the UI mirrors.
+
+        Every snapshot carries an increasing ``stamp`` so the client can drop a
+        reply that overtook a newer one -- a slow job finishing after the user
+        already changed the view, say.
+        """
+        with self.lock:
+            self._stamp += 1
+            stamp = self._stamp
         table = self.table
         if table is None:
-            return {"open": False, "os": os.name, "sep": os.sep, "error": self.error}
+            return {"open": False, "stamp": stamp, "os": os.name, "sep": os.sep,
+                    "error": self.error}
         return {
             "open": True,
+            "stamp": stamp,
             "os": os.name,
             "sep": os.sep,
             "path": table.path,
@@ -69,6 +84,7 @@ class Session:
             "rows": table.row_count,
             "columns": [c.as_dict() for c in table.columns],
             "dialect": table.dialect.as_dict(),
+            "index_mapped": table.index.mapped,
             "dirty": table.dirty,
             "undo": len(table.undo_stack),
             "redo": len(table.redo_stack),
@@ -76,7 +92,8 @@ class Session:
             "view_label": table.view_label,
             "view_rows": len(table.view) if table.view is not None else None,
             "edited_rows": len(table.edits) + len(table.new_rows),
-            "deleted_rows": len(table.seq.deleted),
+            "marks": table.mark_count,
+            "deleted_rows": table.seq.deleted_count,
         }
 
 
@@ -134,8 +151,10 @@ class Api:
         return {"job": job.as_dict()}
 
     def _open_job(self, job: Job, path: str) -> dict:
-        table = Table(path, progress=job.progress)
+        table = Table(path, use_cache=self.session.use_cache, progress=job.progress)
         with self.session.lock:
+            if self.session.table is not None:
+                self.session.table.close()  # release the previous mapping
             self.session.table = table
         return {"rows": table.row_count}
 
@@ -157,6 +176,7 @@ class Api:
                     for rid in ids
                     if (rid < 0 or rid in table.edits)
                 },
+                "marked": [rid for rid in ids if table.is_marked(rid)],
             }
 
     def do_row(self, payload: dict) -> dict:
@@ -243,6 +263,92 @@ class Api:
             table = self.session.require()
             label = table.redo()
             return {"label": label, "state": self.session.state()}
+
+    # ------------------------------------------------------------- bookmarks
+
+    def do_mark(self, payload: dict) -> dict:
+        """Toggle (or set) the bookmark on one row."""
+        with self.session.lock:
+            table = self.session.require()
+            rid = int(payload["rid"])
+            on = payload.get("on")
+            marked = table.set_mark(rid, None if on is None else bool(on))
+            return {"rid": rid, "marked": marked, "count": table.mark_count}
+
+    def do_mark_ids(self, payload: dict) -> dict:
+        with self.session.lock:
+            table = self.session.require()
+            changed = table.mark_ids(
+                [int(i) for i in payload.get("ids", [])], on=bool(payload.get("on", True))
+            )
+            return {"changed": changed, "count": table.mark_count}
+
+    def do_mark_search(self, payload: dict) -> dict:
+        """Bookmark every row matching a search -- Notepad++'s "Mark All"."""
+        conditions = _conditions(payload)
+        match_all = payload.get("match_all", True)
+        replace = bool(payload.get("replace"))
+        scope_view = payload.get("scope") == "view"
+
+        def run(job: Job) -> dict:
+            with self.session.lock:
+                table = self.session.require()
+                if not conditions:
+                    raise ValueError("검색어나 조건이 필요합니다")
+                base = list(table.view) if (scope_view and table.view is not None) else None
+                ids = ops.run_filter(
+                    table, conditions, match_all=match_all, base_ids=base, progress=job.progress
+                )
+                if replace:
+                    table.clear_marks()
+                added = table.mark_ids(ids)
+                return {"matched": len(ids), "added": added, "count": table.mark_count,
+                        "state": self.session.state()}
+
+        return {"job": self.session.jobs.start("mark_search", run, "책갈피 표시").as_dict()}
+
+    def do_marks_invert(self, payload: dict) -> dict:
+        with self.session.lock:
+            table = self.session.require()
+            table.invert_marks()
+            return {"count": table.mark_count, "state": self.session.state()}
+
+    def do_marks_clear(self, payload: dict) -> dict:
+        with self.session.lock:
+            table = self.session.require()
+            table.clear_marks()
+            return {"count": 0, "state": self.session.state()}
+
+    def do_marks_filter(self, payload: dict) -> dict:
+        """Show only bookmarked rows."""
+        with self.session.lock:
+            table = self.session.require()
+            ids = table.marked_ids()
+            if not len(ids):
+                raise ValueError("책갈피가 없습니다")
+            table.view = ids
+            table.view_label = "책갈피"
+            return {"rows": len(ids), "state": self.session.state()}
+
+    def do_marks_delete(self, payload: dict) -> dict:
+        """Delete bookmarked rows, or with ``keep`` everything except them."""
+        keep = bool(payload.get("keep"))
+
+        def run(job: Job) -> dict:
+            with self.session.lock:
+                table = self.session.require()
+                removed = table.delete_marked(keep=keep)
+                return {"removed": removed, "state": self.session.state()}
+
+        label = "책갈피 외 행 삭제" if keep else "책갈피 행 삭제"
+        return {"job": self.session.jobs.start("marks_delete", run, label).as_dict()}
+
+    def do_marks_next(self, payload: dict) -> dict:
+        with self.session.lock:
+            table = self.session.require()
+            pos = int(payload.get("pos", 0))
+            forward = bool(payload.get("forward", True))
+            return {"pos": table.find_mark(pos, forward=forward)}
 
     # --------------------------------------------------------------- queries
 
@@ -395,7 +501,7 @@ class Api:
         path = os.path.expanduser(str(payload.get("path", "")).strip().strip('"'))
         if not path:
             raise ValueError("path is required")
-        view_only = bool(payload.get("view_only"))
+        scope = payload.get("scope") or ("view" if payload.get("view_only") else "all")
         encoding = payload.get("encoding") or None
         delimiter = payload.get("delimiter") or None
         newline = {"crlf": "\r\n", "lf": "\n"}.get(payload.get("newline") or "", None)
@@ -403,11 +509,20 @@ class Api:
         def run(job: Job) -> dict:
             with self.session.lock:
                 table = self.session.require()
-                written = table.save_as(
-                    path, view_only=view_only, delimiter=delimiter,
-                    encoding=encoding, newline=newline, progress=job.progress,
-                )
-                return {"written": written, "path": path}
+                if scope == "marks":
+                    ids = list(table.iter_marked())
+                    if not ids:
+                        raise ValueError("책갈피가 없습니다")
+                    written = table.write_to(
+                        path, ids=ids, delimiter=delimiter, encoding=encoding,
+                        newline=newline, progress=job.progress,
+                    )
+                else:
+                    written = table.save_as(
+                        path, view_only=(scope == "view"), delimiter=delimiter,
+                        encoding=encoding, newline=newline, progress=job.progress,
+                    )
+                return {"written": written, "path": path, "scope": scope}
 
         return {"job": self.session.jobs.start("save_as", run, os.path.basename(path)).as_dict()}
 
@@ -607,8 +722,9 @@ def serve(
     port: int = 0,
     open_browser: bool = True,
     verbose: bool = False,
+    use_cache: bool = True,
 ) -> CsvOptServer:
-    session = Session(path)
+    session = Session(path, use_cache=use_cache)
     token = secrets.token_urlsafe(24)
     server = CsvOptServer((host, port), session, token, verbose=verbose)
     url = f"http://{host}:{server.server_address[1]}/?t={token}"

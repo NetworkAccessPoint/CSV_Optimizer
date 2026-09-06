@@ -3,12 +3,13 @@ import tempfile
 import unittest
 
 from csvopt.index import (
+    HEADER_SIZE,
     build_index,
-    index_cache_path,
+    cache_candidates,
+    drop_cached_index,
     load_cached_index,
     scan_offsets,
     sniff,
-    store_cached_index,
 )
 
 
@@ -124,24 +125,46 @@ class SniffTest(unittest.TestCase):
 
 
 class CacheTest(unittest.TestCase):
-    def test_cache_round_trip_and_invalidation(self):
-        path = write(b"a,b\n" + b"1,2\n" * 1000)
-        try:
-            idx = build_index(path, use_cache=False)
-            self.assertTrue(store_cached_index(path, idx))
-            cached = load_cached_index(path)
-            self.assertIsNotNone(cached)
-            self.assertEqual(len(cached), len(idx))
+    def setUp(self):
+        # Big enough to cross the "worth caching" threshold in build_index.
+        self.path = write(b"a,b\n" + b"1,2,longish padding to grow the file\n" * 300000)
+        self.addCleanup(drop_cached_index, self.path)
+        self.addCleanup(os.unlink, self.path)
 
-            with open(path, "ab") as fh:  # file changed -> cache must be ignored
-                fh.write(b"9,9\n")
-            self.assertIsNone(load_cached_index(path))
-        finally:
-            for p in (path, index_cache_path(path)):
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
+    def test_cache_is_written_mapped_and_reused(self):
+        idx = build_index(self.path)
+        self.assertTrue(idx.mapped)
+        self.assertEqual(idx.memory_bytes, 0)
+        self.assertTrue(os.path.exists(cache_candidates(self.path)[0]))
+        count = len(idx)
+        idx.close()
+
+        cached = load_cached_index(self.path)
+        self.assertIsNotNone(cached)
+        self.assertEqual(len(cached), count)
+        self.assertTrue(cached.mapped)
+        cached.close()
+
+    def test_cache_matches_an_uncached_scan(self):
+        mapped = build_index(self.path)
+        plain = build_index(self.path, use_cache=False)
+        self.assertEqual(len(mapped), len(plain))
+        self.assertEqual(
+            [mapped.start(i) for i in range(0, len(mapped), 5000)],
+            [plain.start(i) for i in range(0, len(plain), 5000)],
+        )
+        mapped.close()
+
+    def test_cache_is_invalidated_when_the_file_changes(self):
+        build_index(self.path).close()
+        with open(self.path, "ab") as fh:
+            fh.write(b"9,9\n")
+        self.assertIsNone(load_cached_index(self.path))
+
+    def test_header_is_page_aligned(self):
+        build_index(self.path).close()
+        self.assertEqual(HEADER_SIZE % 4096, 0)
+        self.assertGreater(os.path.getsize(cache_candidates(self.path)[0]), HEADER_SIZE)
 
 
 if __name__ == "__main__":
