@@ -11,12 +11,14 @@ jobs:
   test:
     name: tests (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    # A hung test should fail the job in minutes, not hold a runner for hours.
+    # A stuck test should fail the job in minutes, not hold a runner for hours.
+    # (macOS is the slowest of the three: ~40s for the suite against ~5s
+    # elsewhere, so the ceiling has to leave it room.)
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -34,29 +36,6 @@ jobs:
           python -m csvopt info sample.csv
           python -m csvopt grep sample.csv -w level=ERROR -o errors.csv
           python -m csvopt convert sample.csv -o out.csv --encoding utf-8-sig --newline crlf
-
-  # macOS runs the same suite but does not gate the packaged binaries: the suite
-  # currently hangs on the macOS runners and the cause is still being tracked
-  # down. Keeping it visible but non-blocking means the Windows and Linux
-  # artifacts still get built while that is investigated.
-  test-macos:
-    name: tests (macos-latest, py${{ matrix.python }})
-    runs-on: macos-latest
-    continue-on-error: true
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.12"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Run the test suite
-        run: python tools/run_tests.py --timeout 240 --verbose
-      - name: Run the worker-pool tests
-        run: python tools/run_pool_tests.py
 
   package:
     name: package (${{ matrix.os }})

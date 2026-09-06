@@ -206,12 +206,15 @@ python3 -m csvopt convert app.csv -o excel.csv --encoding utf-8-sig --newline cr
 ## 개발
 
 ```bash
-python3 -m unittest discover -s tests -t .      # 112개 테스트
+python3 tools/run_tests.py                      # 115개 테스트 (타임아웃 포함)
+python3 tools/run_pool_tests.py                 # 워커 프로세스 테스트
 python3 tools/make_sample_log.py sample.csv --rows 2000000   # 시험용 로그 생성
 python3 -m PyInstaller --clean --noconfirm packaging/csvopt.spec   # 실행 파일 빌드
 ```
 
-GitHub Actions 는 Windows·macOS·Linux × Python 3.9/3.12 에서 테스트를 돌리고 실행 파일을 만듭니다.
+GitHub Actions 가 Windows·macOS·Linux × Python 3.9/3.12 에서 테스트를 돌리고,
+세 OS 의 실행 파일을 만들어 아티팩트로 올립니다(`csvopt-windows`, `csvopt-macos`,
+`csvopt-linux`). 실행 파일이 필요하면 Actions 탭의 최신 실행에서 받으면 됩니다.
 
 ```
 csvopt/
