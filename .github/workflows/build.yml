@@ -42,6 +42,8 @@ jobs:
     needs: test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -75,3 +77,24 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
+      # Artifacts can only be fetched through the Actions API. Mirroring the
+      # Windows build onto a throwaway branch makes it reachable with a plain
+      # `git fetch`, which is handy from machines that only have git access.
+      # The branch is force-pushed, so it never accumulates history.
+      - name: Mirror the Windows binary to the builds branch
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf mirror && mkdir mirror
+          cp dist/csvopt.exe mirror/
+          echo "csvopt.exe built from ${GITHUB_SHA} on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > mirror/BUILD.txt
+          cd mirror
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b builds/windows
+          git add -A
+          git commit -qm "csvopt.exe from ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" builds/windows
