@@ -121,8 +121,22 @@
           <div id="mark-hint" class="muted"></div>
         </div>
         <div data-panel="cols" class="panel hidden">
-          <div class="row"><button id="col-add" class="btn small">+ 열 추가</button>
-            <button id="col-showall" class="btn small ghost">모두 표시</button></div>
+          <div class="row">
+            <button id="col-add" class="btn small">+ 열 추가</button>
+            <button id="col-showall" class="btn small ghost">모두 표시</button>
+          </div>
+          <div class="bulkbar">
+            <label class="chk"><input type="checkbox" id="col-pick-all"> 전체 선택</label>
+            <b id="col-pick-count">0</b><span class="muted">개 선택</span>
+            <span class="spacer"></span>
+            <button id="col-pick-hide" class="btn tiny ghost" disabled>숨기기</button>
+            <button id="col-pick-show" class="btn tiny ghost" disabled>표시</button>
+            <button id="col-pick-delete" class="btn tiny danger" disabled>삭제</button>
+          </div>
+          <div class="muted">
+            체크박스로 여러 열을 고르거나, 표 머리글에서 <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+클릭,
+            <kbd>Shift</kbd>+클릭으로 선택할 수 있습니다. 여러 열을 지워도 되돌리기는 한 번입니다.
+          </div>
           <div id="col-list" class="collist"></div>
         </div>
       </div>

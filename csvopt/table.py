@@ -886,9 +886,25 @@ class Table:
         self._set_columns(cols, "add column")
         return col.id
 
-    def delete_column(self, cid: int) -> None:
-        cols = [c for c in self._column_snapshot() if c.id != cid]
-        self._set_columns(cols, "delete column")
+    def delete_column(self, cid: int) -> int:
+        return self.delete_columns([cid])
+
+    def delete_columns(self, cids: Iterable[int]) -> int:
+        """Drop several columns at once, as a single undoable operation.
+
+        Deleting columns one by one would push one undo step each; doing it in
+        one go means a single Ctrl+Z brings them all back.
+        """
+        doomed = {int(cid) for cid in cids}
+        kept = [c for c in self._column_snapshot() if c.id not in doomed]
+        removed = len(self.columns) - len(kept)
+        if not removed:
+            return 0
+        if not kept:
+            raise ValueError("모든 열을 삭제할 수는 없습니다. 최소 한 개는 남겨야 합니다.")
+        label = "delete column" if removed == 1 else f"delete {removed} columns"
+        self._set_columns(kept, label)
+        return removed
 
     def move_column(self, cid: int, to: int) -> None:
         cols = self._column_snapshot()

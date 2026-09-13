@@ -235,3 +235,32 @@ class WorkerSettingTest(ServerCase):
         self.assertIn("workers", state)
         # The fixture file is tiny, so filtering stays in this process.
         self.assertEqual(state["workers"], 1)
+
+
+class ColumnApiTest(ServerCase):
+    def column_names(self):
+        return [c["name"] for c in self.call("state")["columns"]]
+
+    def test_delete_many_columns_in_one_request(self):
+        cols = self.call("state")["columns"]
+        res = self.call("column", action="delete", cids=[cols[0]["id"], cols[2]["id"]])
+        self.assertEqual(res["removed"], 2)
+        self.assertEqual(self.column_names(), ["level"])
+        self.assertEqual(self.call("rows", start=0, count=1)["rows"], [["INFO"]])
+        self.call("undo")
+        self.assertEqual(self.column_names(), ["ts", "level", "msg"])
+
+    def test_single_cid_is_still_accepted(self):
+        cols = self.call("state")["columns"]
+        res = self.call("column", action="delete", cid=cols[1]["id"])
+        self.assertEqual(res["removed"], 1)
+        self.assertEqual(self.column_names(), ["ts", "msg"])
+        self.call("undo")
+        self.assertEqual(self.column_names(), ["ts", "level", "msg"])
+
+    def test_deleting_all_columns_is_rejected(self):
+        cols = self.call("state")["columns"]
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("column", action="delete", cids=[c["id"] for c in cols])
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertEqual(len(self.column_names()), 3)

@@ -383,3 +383,51 @@ class DiskGuardTest(TempFileTest):
         finally:
             _shutil.disk_usage = original
         self.assertIn("공간", str(ctx.exception))
+
+
+class ColumnDeleteTest(TempFileTest):
+    def names(self, table):
+        return [c.name for c in table.columns]
+
+    def test_delete_several_columns_in_one_step(self):
+        table = self.table()
+        ids = [table.columns[0].id, table.columns[2].id]
+        self.assertEqual(table.delete_columns(ids), 2)
+        self.assertEqual(self.names(table), ["level"])
+        self.assertEqual(self.rows(table), [["INFO"], ["ERROR"], ["WARN"], ["INFO"]])
+
+    def test_one_undo_brings_every_column_back(self):
+        table = self.table()
+        before = self.names(table)
+        table.delete_columns([table.columns[0].id, table.columns[1].id])
+        self.assertEqual(len(table.undo_stack), 1)
+        table.undo()
+        self.assertEqual(self.names(table), before)
+        self.assertEqual(self.rows(table)[0], ["1", "INFO", "hello"])
+        table.redo()
+        self.assertEqual(self.names(table), ["msg"])
+
+    def test_unknown_ids_are_ignored(self):
+        table = self.table()
+        self.assertEqual(table.delete_columns([9999]), 0)
+        self.assertEqual(len(table.columns), 3)
+        self.assertEqual(table.undo_stack, [])
+
+    def test_deleting_every_column_is_refused(self):
+        table = self.table()
+        with self.assertRaises(ValueError):
+            table.delete_columns([c.id for c in table.columns])
+        self.assertEqual(len(table.columns), 3)
+
+    def test_saved_file_reflects_the_deletion(self):
+        table = self.table()
+        table.delete_columns([table.columns[0].id, table.columns[2].id])
+        out = os.path.join(self.dir.name, "trimmed.csv")
+        table.write_to(out)
+        with open(out, encoding="utf-8", newline="") as fh:
+            self.assertEqual(fh.read(), "level\nINFO\nERROR\nWARN\nINFO\n")
+
+    def test_single_delete_still_works(self):
+        table = self.table()
+        self.assertEqual(table.delete_column(table.columns[1].id), 1)
+        self.assertEqual(self.names(table), ["ts", "msg"])

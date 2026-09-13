@@ -12,6 +12,7 @@
   --warn: #b7791f;
   --ok: #1f7a4d;
   --sel: #cfe0ff;
+  --colsel: #eaf1ff;
   --edit: #fff4cd;
   --row-alt: #fafbfc;
   --mark: #ffd76a;
@@ -33,6 +34,7 @@
   --warn: #e8b04b;
   --ok: #4ec98a;
   --sel: #2b3f63;
+  --colsel: #1e2a3d;
   --edit: #4a3f16;
   --row-alt: #191d24;
   --mark: #7a5f14;
@@ -107,6 +109,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft
   white-space: nowrap; overflow: hidden; flex: 0 0 auto; cursor: pointer;
 }
 .hcell.pinned { position: sticky; left: 0; z-index: 3; background: var(--panel); }
+.hcell.colsel { background: var(--accent-soft); box-shadow: inset 0 -2px 0 var(--accent); }
+#canvas .row .cell.colsel { background: var(--colsel); }
+#canvas .row .cell.colsel.sel { background: var(--sel); }
 .hcell .sort { color: var(--accent); font-size: 10px; }
 .hcell .grip {
   position: absolute; right: -3px; top: 0; width: 7px; height: 100%;
@@ -174,6 +179,12 @@ body.wrap .cell { white-space: pre-wrap; word-break: break-word; line-height: 1.
 .summary b { font-weight: 600; }
 .marks div, .collist div { display: flex; align-items: center; gap: 6px; padding: 3px 0;
                            border-bottom: 1px solid var(--line); font-size: 12px; }
+.collist div.picked { background: var(--accent-soft); border-radius: 4px; }
+.collist input[type="checkbox"] { flex: 0 0 auto; }
+.bulkbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+           padding: 6px; background: var(--panel-2); border: 1px solid var(--line);
+           border-radius: 6px; }
+.bulkbar b { font-weight: 600; }
 .marks span.jump { cursor: pointer; color: var(--accent); font-family: var(--mono); }
 .collist input[type="text"] { flex: 1; }
 

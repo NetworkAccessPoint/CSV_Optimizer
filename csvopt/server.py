@@ -263,6 +263,7 @@ class Api:
 
     def do_column(self, payload: dict) -> dict:
         action = payload.get("action")
+        removed = 0
         with self.session.lock:
             table = self.session.require()
             if action == "rename":
@@ -270,12 +271,16 @@ class Api:
             elif action == "add":
                 table.add_column(str(payload.get("name", "new_column")), payload.get("at"))
             elif action == "delete":
-                table.delete_column(int(payload["cid"]))
+                # `cids` deletes several at once; `cid` stays for single deletes.
+                cids = payload.get("cids")
+                if cids is None:
+                    cids = [payload["cid"]]
+                removed = table.delete_columns([int(c) for c in cids])
             elif action == "move":
                 table.move_column(int(payload["cid"]), int(payload["to"]))
             else:
                 raise ValueError(f"unknown column action: {action}")
-            return {"state": self.session.state()}
+            return {"removed": removed, "state": self.session.state()}
 
     def do_undo(self, payload: dict) -> dict:
         with self.session.lock:

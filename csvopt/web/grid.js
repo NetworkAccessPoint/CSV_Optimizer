@@ -7,6 +7,8 @@
 (function (global) {
   'use strict';
 
+  const IS_MAC = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent);
+  const MOD_KEY = IS_MAC ? '⌘' : 'Ctrl';
   const CHUNK = 400;          // rows fetched per request
   const MAX_CANVAS_PX = 12e6; // stay well inside every browser's element limit
   const NUM_W = 78;
@@ -23,6 +25,7 @@
       this.onSelChange = opts.onSelChange || (() => {});
       this.onHeaderContext = opts.onHeaderContext || (() => {});
       this.onSort = opts.onSort || (() => {});
+      this.onColumnSelChange = opts.onColumnSelChange || (() => {});
 
       this.columns = [];
       this.total = 0;
@@ -36,6 +39,8 @@
       this.anchor = { r: 0, c: 0 };
       this.marks = new Set();       // row ids
       this.hits = new Set();        // "rid:col" keys highlighted by find
+      this.selectedColumns = new Set();  // column ids picked in the header
+      this.lastColumnPick = null;        // anchor for Shift+click ranges
       this.levelCol = -1;
       this.editing = null;
       this.dragging = false;
@@ -215,15 +220,24 @@
       this.head.appendChild(num);
       cols.forEach((col) => {
         const el = document.createElement('div');
-        el.className = 'hcell' + (col.pinned ? ' pinned' : '');
+        el.className = 'hcell' + (col.pinned ? ' pinned' : '')
+          + (this.selectedColumns.has(col.id) ? ' colsel' : '');
         el.style.width = col.width + 'px';
         el.dataset.cid = col.id;
         el.innerHTML = '<span class="nm"></span><span class="sort"></span>';
         el.querySelector('.nm').textContent = col.name;
         el.querySelector('.sort').textContent = col.sort === 1 ? '▲' : col.sort === -1 ? '▼' : '';
-        el.title = col.name + ' — 클릭: 정렬, 우클릭: 메뉴';
+        el.title = col.name
+          + ' — 클릭: 정렬, ' + (MOD_KEY + '+클릭: 열 선택, Shift+클릭: 범위 선택, 우클릭: 메뉴');
         el.addEventListener('click', (e) => {
           if (e.target.classList.contains('grip')) return;
+          const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+          if (mod || e.shiftKey) {
+            e.preventDefault();
+            this.pickColumn(col, e.shiftKey && !mod ? 'range' : 'toggle');
+            return;
+          }
+          this.clearColumnSelection();
           const dir = col.sort === -1 ? 1 : -1;
           this.columns.forEach((c) => { c.sort = 0; });
           col.sort = dir;
@@ -242,6 +256,49 @@
         this.head.appendChild(el);
       });
       this.layout();
+    }
+
+    /* ------------------------------------------------- column selection */
+
+    pickColumn(col, mode) {
+      const order = this.visibleColumns();
+      if (mode === 'range' && this.lastColumnPick != null) {
+        const from = order.findIndex((c) => c.id === this.lastColumnPick);
+        const to = order.indexOf(col);
+        if (from >= 0 && to >= 0) {
+          const [lo, hi] = from <= to ? [from, to] : [to, from];
+          for (let i = lo; i <= hi; i++) this.selectedColumns.add(order[i].id);
+        }
+      } else if (this.selectedColumns.has(col.id)) {
+        this.selectedColumns.delete(col.id);
+      } else {
+        this.selectedColumns.add(col.id);
+      }
+      this.lastColumnPick = col.id;
+      this.afterColumnSelection();
+    }
+
+    selectColumns(ids) {
+      this.selectedColumns = new Set(ids);
+      this.afterColumnSelection();
+    }
+
+    clearColumnSelection() {
+      if (!this.selectedColumns.size) return;
+      this.selectedColumns.clear();
+      this.lastColumnPick = null;
+      this.afterColumnSelection();
+    }
+
+    afterColumnSelection() {
+      this.renderHeader();
+      this.render();
+      this.onColumnSelChange(this.selectedColumnList());
+    }
+
+    /* Selected columns in display order. */
+    selectedColumnList() {
+      return this.columns.filter((c) => this.selectedColumns.has(c.id));
     }
 
     startResize(e, col) {
@@ -348,7 +405,8 @@
           const value = data ? (data.cells[ci] != null ? data.cells[ci] : '') : '';
           cell.textContent = data ? value : '⋯';
           cell.style.width = cols[k].width + 'px';
-          let cc = 'cell' + (cols[k].pinned ? ' pinned' : '');
+          let cc = 'cell' + (cols[k].pinned ? ' pinned' : '')
+            + (this.selectedColumns.has(cols[k].id) ? ' colsel' : '');
           if (data && data.edited && data.edited.indexOf(cols[k].id) >= 0) cc += ' edited';
           if (sel && r >= sel.r0 && r <= sel.r1 && ci >= sel.c0 && ci <= sel.c1) cc += ' sel';
           if (r === this.cursor.r && ci === this.cursor.c) cc += ' cursor';

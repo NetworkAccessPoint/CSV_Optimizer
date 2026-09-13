@@ -11,6 +11,32 @@
   };
   const MOD = API.MOD_LABEL;
 
+  /* The engine labels its undo steps in English (tests pin those strings);
+     the UI speaks Korean, so translate on the way out. */
+  const OP_LABELS = {
+    'edit': '셀 편집',
+    'insert row': '행 삽입',
+    'trim whitespace': '공백 정리',
+    'rename column': '열 이름 변경',
+    'add column': '열 추가',
+    'move column': '열 순서 변경',
+    'delete column': '열 삭제',
+    'delete bookmarked rows': '책갈피 행 삭제',
+    'delete unmarked rows': '책갈피 외 행 삭제',
+  };
+
+  function opLabel(label) {
+    if (!label) return '';
+    if (OP_LABELS[label]) return OP_LABELS[label];
+    let m = label.match(/^delete (\d+) columns$/);
+    if (m) return `열 ${m[1]}개 삭제`;
+    m = label.match(/^delete (\d+) row\(s\)$/);
+    if (m) return `행 ${API.num(+m[1])}개 삭제`;
+    m = label.match(/^replace '(.*)'$/);
+    if (m) return `'${m[1]}' 바꾸기`;
+    return label;
+  }
+
   const state = {
     server: null,      // last /api/state payload
     filters: [],       // active conditions
@@ -311,14 +337,22 @@
 
   /* ----------------------------------------------------------- side panel */
 
+  let lastPickedIndex = -1;   // anchor for Shift+click in the column list
+
   function renderColumnPanel() {
     const box = $('#col-list');
     box.innerHTML = '';
+    const picked = grid.selectedColumns;
     grid.columns.forEach((col, i) => {
-      const row = el('div');
-      const vis = el('input'); vis.type = 'checkbox'; vis.checked = !col.hidden;
-      vis.title = '표시';
-      vis.onchange = () => { col.hidden = !vis.checked; grid.renderHeader(); };
+      const row = el('div', picked.has(col.id) ? 'picked' : '');
+      const pick = el('input');
+      pick.type = 'checkbox';
+      pick.checked = picked.has(col.id);
+      pick.title = '선택 (Shift+클릭: 범위)';
+      pick.onclick = (e) => pickColumnRow(col, i, e.shiftKey);
+      const vis = el('button', 'btn tiny' + (col.hidden ? ' ghost' : ' primary'), col.hidden ? '숨김' : '표시');
+      vis.title = '표시/숨기기';
+      vis.onclick = () => { col.hidden = !col.hidden; grid.renderHeader(); renderColumnPanel(); };
       const name = el('input'); name.type = 'text'; name.value = col.name;
       name.onchange = async () => {
         try {
@@ -333,11 +367,45 @@
       const down = el('button', 'btn tiny ghost', '↓');
       down.onclick = () => moveColumn(col.id, i + 1);
       const del = el('button', 'btn tiny ghost', '✕');
-      del.title = '열 삭제';
-      del.onclick = () => confirmDeleteColumn(col);
-      [vis, name, pin, up, down, del].forEach((n) => row.appendChild(n));
+      del.title = '이 열 삭제';
+      del.onclick = () => confirmDeleteColumns([col]);
+      [pick, vis, name, pin, up, down, del].forEach((n) => row.appendChild(n));
       box.appendChild(row);
     });
+    renderColumnSelection();
+  }
+
+  /* Checkbox click: plain toggles, Shift extends from the last one picked. */
+  function pickColumnRow(col, index, extend) {
+    if (extend && lastPickedIndex >= 0) {
+      const [lo, hi] = lastPickedIndex <= index
+        ? [lastPickedIndex, index] : [index, lastPickedIndex];
+      const ids = new Set(grid.selectedColumns);
+      for (let i = lo; i <= hi; i++) ids.add(grid.columns[i].id);
+      grid.selectColumns(ids);
+    } else {
+      grid.pickColumn(col, 'toggle');
+    }
+    lastPickedIndex = index;
+  }
+
+  /* Keeps the bulk toolbar in step with whatever is selected. */
+  function renderColumnSelection() {
+    const picked = grid.selectedColumnList();
+    const total = grid.columns.length;
+    $('#col-pick-count').textContent = picked.length;
+    $('#col-pick-all').checked = picked.length > 0 && picked.length === total;
+    $('#col-pick-all').indeterminate = picked.length > 0 && picked.length < total;
+    ['#col-pick-hide', '#col-pick-show', '#col-pick-delete'].forEach((sel) => {
+      $(sel).disabled = picked.length === 0;
+    });
+    document.querySelectorAll('#col-list > div').forEach((row, i) => {
+      const on = grid.selectedColumns.has(grid.columns[i] && grid.columns[i].id);
+      row.classList.toggle('picked', !!on);
+      const box = row.querySelector('input[type="checkbox"]');
+      if (box) box.checked = !!on;
+    });
+    if (picked.length > 1) $('#st-sel').textContent = `열 ${picked.length}개 선택`;
   }
 
   async function moveColumn(cid, to) {
@@ -348,16 +416,30 @@
     } catch (err) { fail(err); }
   }
 
-  function confirmDeleteColumn(col) {
+  function confirmDeleteColumns(cols) {
+    if (!cols.length) return;
     const body = el('div');
-    body.appendChild(el('p', null, `'${col.name}' 열을 삭제할까요? 저장 전에는 실행 취소(${MOD}+Z)로 되돌릴 수 있습니다.`));
-    modal('열 삭제', body, [
+    body.appendChild(el('p', null, cols.length === 1
+      ? `'${cols[0].name}' 열을 삭제할까요?`
+      : `${cols.length}개 열을 삭제할까요?`));
+    if (cols.length > 1) {
+      const shown = cols.slice(0, 12).map((c) => c.name).join(', ');
+      body.appendChild(el('p', null,
+        shown + (cols.length > 12 ? ` 외 ${cols.length - 12}개` : '')));
+    }
+    body.appendChild(el('p', 'muted',
+      `저장 전까지 원본 파일은 그대로이며, ${MOD}+Z 한 번으로 모두 되돌아옵니다.`));
+    modal(cols.length === 1 ? '열 삭제' : `열 ${cols.length}개 삭제`, body, [
       { label: '취소' },
       { label: '삭제', primary: true, action: async () => {
         try {
-          await API.call('column', { action: 'delete', cid: col.id });
+          const res = await API.call('column', {
+            action: 'delete', cids: cols.map((c) => c.id),
+          });
+          grid.clearColumnSelection();
           grid.invalidate();
-          await refreshState();
+          await refreshState(res.state);
+          say(`열 ${API.num(res.removed)}개를 삭제했습니다. (${MOD}+Z로 취소)`);
         } catch (err) { fail(err); }
       } },
     ]);
@@ -622,6 +704,9 @@
         applyFilters(false);
       } },
       '-',
+      { label: `선택 범위의 열 ${selectedSpanColumns().length}개 삭제`,
+        action: () => confirmDeleteColumns(selectedSpanColumns()) },
+      '-',
       { label: '위에 행 삽입', action: () => insertRow(hit.r) },
       { label: '아래에 행 삽입', action: () => insertRow(hit.r + 1) },
       { label: '선택한 행 복제', action: () => duplicateRows(ids) },
@@ -639,7 +724,28 @@
     ]);
   }
 
+  /* Columns the current cell selection spans. */
+  function selectedSpanColumns() {
+    const box = grid.selectionBox();
+    return grid.columns.slice(box.c0, box.c1 + 1);
+  }
+
   function headerMenu(e, col) {
+    // Right-clicking inside a multi-column selection acts on the whole set.
+    const picked = grid.selectedColumnList();
+    if (picked.length > 1 && grid.selectedColumns.has(col.id)) {
+      menu(e.clientX, e.clientY, [
+        { label: `선택한 ${picked.length}개 열 삭제`, action: () => confirmDeleteColumns(picked) },
+        { label: `선택한 ${picked.length}개 열 숨기기`, action: () => {
+          picked.forEach((c) => { c.hidden = true; });
+          grid.clearColumnSelection();
+          grid.renderHeader();
+          renderColumnPanel();
+        } },
+        { label: '선택 해제', action: () => { grid.clearColumnSelection(); renderColumnPanel(); } },
+      ]);
+      return;
+    }
     menu(e.clientX, e.clientY, [
       { label: '오름차순 정렬', action: () => sortBy(col, false) },
       { label: '내림차순 정렬', action: () => sortBy(col, true) },
@@ -654,7 +760,11 @@
       '-',
       { label: '이름 변경…', action: () => renameColumn(col) },
       { label: '왼쪽에 열 추가', action: () => addColumn(grid.columns.indexOf(col)) },
-      { label: '열 삭제', action: () => confirmDeleteColumn(col) },
+      { label: '열 삭제', action: () => confirmDeleteColumns([col]) },
+      { label: '이 열 선택에 추가', key: MOD + '+클릭', action: () => {
+        grid.pickColumn(col, 'toggle');
+        renderColumnPanel();
+      } },
     ]);
   }
 
@@ -902,6 +1012,8 @@
     add(MOD + '+G', '행으로 이동');
     add(MOD + '+S', '저장');
     add(MOD + '+O', '파일 열기');
+    add(MOD + '+머리글 클릭', '열 선택 (Shift+클릭: 범위)');
+    add('Shift+Delete', '선택한 열 삭제');
     add('M, ' + MOD + '+F2', '책갈피 토글');
     add('F2 / Shift+F2', '다음 / 이전 책갈피');
     add('PageUp / PageDown', '한 화면 이동');
@@ -1043,7 +1155,13 @@
         if (mod) toggleMark();
         else gotoMark(!e.shiftKey);
         break;
-      case 'Delete': case 'Backspace': e.preventDefault(); clearSelection(); break;
+      case 'Delete': case 'Backspace': {
+        e.preventDefault();
+        const picked = grid.selectedColumnList();
+        if (e.shiftKey && picked.length) confirmDeleteColumns(picked);
+        else clearSelection();
+        break;
+      }
       case 'Escape': grid.cancelEdit(); break;
       case 'm': case 'M':
         toggleMark();
@@ -1062,7 +1180,7 @@
       const res = await API.call('undo');
       grid.invalidate();
       await refreshState(res.state);
-      if (res.label) say('실행 취소: ' + res.label);
+      if (res.label) say('실행 취소: ' + opLabel(res.label));
     } catch (err) { fail(err); }
   }
 
@@ -1071,7 +1189,7 @@
       const res = await API.call('redo');
       grid.invalidate();
       await refreshState(res.state);
-      if (res.label) say('다시 실행: ' + res.label);
+      if (res.label) say('다시 실행: ' + opLabel(res.label));
     } catch (err) { fail(err); }
   }
 
@@ -1103,7 +1221,10 @@
       onContext: cellMenu,
       onHeaderContext: headerMenu,
       onSort: (col, desc) => sortBy(col, desc),
+      onColumnSelChange: () => renderColumnSelection(),
       onSelChange: (box) => {
+        const picked = grid.selectedColumnList().length;
+        if (picked > 1) { $('#st-sel').textContent = `열 ${picked}개 선택`; return; }
         const rows = box.r1 - box.r0 + 1;
         const cols = box.c1 - box.c0 + 1;
         $('#st-sel').textContent = rows * cols > 1
@@ -1154,6 +1275,21 @@
     $('#mark-next').onclick = () => gotoMark(true);
     $('#col-add').onclick = () => addColumn(null);
     $('#col-showall').onclick = () => { grid.columns.forEach((c) => { c.hidden = false; }); grid.renderHeader(); renderColumnPanel(); };
+    $('#col-pick-all').onclick = (e) => {
+      grid.selectColumns(e.target.checked ? grid.columns.map((c) => c.id) : []);
+      renderColumnPanel();
+    };
+    $('#col-pick-delete').onclick = () => confirmDeleteColumns(grid.selectedColumnList());
+    $('#col-pick-hide').onclick = () => {
+      grid.selectedColumnList().forEach((c) => { c.hidden = true; });
+      grid.renderHeader();
+      renderColumnPanel();
+    };
+    $('#col-pick-show').onclick = () => {
+      grid.selectedColumnList().forEach((c) => { c.hidden = false; });
+      grid.renderHeader();
+      renderColumnPanel();
+    };
     $('#job-cancel').onclick = () => { if (state.activeJob) API.cancel(state.activeJob); };
     document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => showTab(t.dataset.tab); });
     window.addEventListener('beforeunload', (e) => {
