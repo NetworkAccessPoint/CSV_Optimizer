@@ -1,0 +1,103 @@
+name: test and package
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    # A stuck test should fail the job in minutes, not hold a runner for hours.
+    # (macOS is the slowest of the three: ~40s for the suite against ~5s
+    # elsewhere, so the ceiling has to leave it room.)
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run the test suite
+        run: python tools/run_tests.py --timeout 240 --verbose
+      - name: Run the worker-pool tests
+        run: python tools/run_pool_tests.py
+      - name: Smoke test the CLI
+        shell: bash
+        run: |
+          python tools/make_sample_log.py sample.csv --rows 20000
+          python -m csvopt info sample.csv
+          python -m csvopt grep sample.csv -w level=ERROR -o errors.csv
+          python -m csvopt convert sample.csv -o out.csv --encoding utf-8-sig --newline crlf
+
+  package:
+    name: package (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: csvopt-windows
+            binary: dist/csvopt.exe
+            mirror: builds/windows
+          - os: macos-latest
+            artifact: csvopt-macos
+            binary: dist/csvopt
+            mirror: builds/macos
+          - os: ubuntu-latest
+            artifact: csvopt-linux
+            binary: dist/csvopt
+            mirror: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pyinstaller
+      - name: Build
+        run: python -m PyInstaller --clean --noconfirm packaging/csvopt.spec
+      - name: Smoke test the executable
+        shell: bash
+        run: |
+          "${{ matrix.binary }}" --version
+          python tools/make_sample_log.py sample.csv --rows 20000
+          "${{ matrix.binary }}" info sample.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+          if-no-files-found: error
+      # Artifacts can only be fetched through the Actions API. Mirroring a build
+      # onto a throwaway branch makes it reachable with a plain `git fetch`,
+      # which is handy from machines that only have git access. Each branch is
+      # force-pushed, so it never accumulates history.
+      - name: Mirror the binary to a builds branch
+        if: matrix.mirror != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf mirror && mkdir mirror
+          cp "${{ matrix.binary }}" mirror/
+          echo "${{ matrix.artifact }} built from ${GITHUB_SHA} on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > mirror/BUILD.txt
+          cd mirror
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b "${{ matrix.mirror }}"
+          git add -A
+          git commit -qm "${{ matrix.artifact }} from ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${{ matrix.mirror }}"
