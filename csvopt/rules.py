@@ -339,16 +339,32 @@ class RuleSet:
         )
 
     def _build_index(self) -> None:
-        """File each rule under one selective exact value, when it has one."""
-        for index, rule in enumerate(self.rules):
+        """File each rule under its most selective exact value, when it has one.
+
+        Selectivity has to be judged against the whole table, not one rule:
+        in a 500-line policy every rule names a protocol, so filing by protocol
+        would put 250 rules in one bucket and test them all on every TCP line.
+        Counting how many rules share each value first picks the port instead.
+        """
+        options: list[list[Condition]] = []
+        shared: dict[tuple[int, str], int] = {}
+        for rule in self.rules:
+            usable = [c for c in rule.conditions if c.exact_values]
+            options.append(usable)
+            for condition in usable:
+                for value in condition.exact_values:
+                    key = (condition.index, value)
+                    shared[key] = shared.get(key, 0) + 1
+        for index, usable in enumerate(options):
             chosen: Optional[Condition] = None
-            for condition in rule.conditions:
+            best: Optional[tuple[int, int]] = None
+            for condition in usable:
                 values = condition.exact_values
-                if not values:
-                    continue
-                # Fewer alternatives means a tighter bucket.
-                if chosen is None or len(values) < len(chosen.exact_values):
-                    chosen = condition
+                # What filing here would cost: the most rules a single value
+                # of it would drag into one bucket, then the bucket count.
+                cost = (max(shared[(condition.index, v)] for v in values), len(values))
+                if best is None or cost < best:
+                    best, chosen = cost, condition
             if chosen is None:
                 self.always.append(index)
                 continue

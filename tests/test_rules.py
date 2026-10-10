@@ -171,6 +171,21 @@ class RunCase(unittest.TestCase):
                     break
         self.assertEqual(list(zip(fast.ids, fast.rule_of)), slow)
 
+    def test_bucket_key_is_the_value_fewest_rules_share(self):
+        # Every rule names a protocol, so filing by protocol would put them
+        # all in two buckets; the ports are what tell them apart.
+        pasted = ["Protocol\tPort"]
+        pasted += [f"TCP\t{port}" for port in range(1000, 1060)]
+        header, rows = rules.parse_table("\n".join(pasted))
+        mapping = [
+            {"column": self.table.columns[3].id, "kind": "equals"},
+            {"column": self.table.columns[5].id, "kind": "ports"},
+        ]
+        ruleset = rules.build_ruleset(self.table, rows, mapping)
+        self.assertEqual(len(ruleset.buckets), len(rows))
+        self.assertEqual(ruleset.key_columns, [5])
+        self.assertEqual(max(len(v) for v in ruleset.buckets.values()), 1)
+
     def test_first_rule_wins_when_two_overlap(self):
         pasted = "Source\tPort\n70.222.12.0/26\t161\n70.222.12.5\t161\n"
         header, rows = rules.parse_table(pasted)
