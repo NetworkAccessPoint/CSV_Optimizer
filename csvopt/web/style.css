@@ -160,7 +160,8 @@ body.wrap .cell { white-space: pre-wrap; word-break: break-word; line-height: 1.
         background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
 .side-tabs { display: flex; border-bottom: 1px solid var(--line); }
 .tab { flex: 1; border: 0; background: none; color: var(--muted); font: inherit;
-       padding: 7px 4px; cursor: pointer; border-bottom: 2px solid transparent; }
+       font-size: 12px; padding: 7px 3px; cursor: pointer; white-space: nowrap;
+       border-bottom: 2px solid transparent; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 .side-body { flex: 1; overflow: auto; padding: 10px; }
 .panel { display: flex; flex-direction: column; gap: 8px; }
@@ -187,6 +188,34 @@ body.wrap .cell { white-space: pre-wrap; word-break: break-word; line-height: 1.
 .bulkbar b { font-weight: 600; }
 .marks span.jump { cursor: pointer; color: var(--accent); font-family: var(--mono); }
 .collist input[type="text"] { flex: 1; }
+
+/* ------------------------------------------------------- multi searcher */
+#rules-text { font-family: var(--mono); font-size: 11px; resize: vertical; width: 100%; }
+.rulemap { display: grid; grid-template-columns: auto 1fr 1fr; gap: 4px 6px;
+           align-items: center; font-size: 12px; padding: 6px;
+           background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; }
+.rulemap b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.rulemap select { font-size: 11px; padding: 1px 4px; }
+.rulesout { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.rulesout .head { display: flex; align-items: center; gap: 6px; padding-bottom: 2px; }
+.rulesout div.rule {
+  display: flex; align-items: baseline; gap: 6px; padding: 3px 4px; cursor: pointer;
+  border-bottom: 1px solid var(--line); border-radius: 4px;
+}
+.rulesout div.rule:hover { background: var(--accent-soft); }
+.rulesout div.rule.picked { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.rulesout div.rule.zero { color: var(--muted); }
+.rulesout div.rule.zero .n { color: var(--danger); font-weight: 700; }
+.rulesout .no { font-family: var(--mono); color: var(--muted); min-width: 22px; text-align: right; }
+.rulesout .n { font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
+.rulesout .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                 font-family: var(--mono); font-size: 11px; }
+
+/* The gutter shows which rule caught the row. */
+.cell.rownum.hasrule::after {
+  content: attr(data-rule); margin-left: 5px; padding: 0 4px; border-radius: 7px;
+  background: var(--accent); color: #fff; font-size: 10px; line-height: 14px;
+}
 
 /* ----------------------------------------------------------------- status */
 .status { border-top: 1px solid var(--line); border-bottom: 0; font-size: 12px; }

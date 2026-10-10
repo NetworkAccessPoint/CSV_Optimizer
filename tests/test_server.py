@@ -12,14 +12,19 @@ DATA = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,tail\n"
 
 
 class ServerCase(unittest.TestCase):
-    """Shared fixture: one server instance for every API test."""
+    """Shared fixture: one server instance for every API test.
+
+    A subclass that needs a differently shaped log overrides ``DATA``.
+    """
+
+    DATA = DATA
 
     @classmethod
     def setUpClass(cls):
         cls.dir = tempfile.TemporaryDirectory()
         cls.path = os.path.join(cls.dir.name, "log.csv")
         with open(cls.path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(DATA)
+            fh.write(cls.DATA)
         cls.server = serve(cls.path, port=0, open_browser=False)
         cls.base = f"http://127.0.0.1:{cls.server.server_address[1]}"
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -264,3 +269,135 @@ class ColumnApiTest(ServerCase):
             self.call("column", action="delete", cids=[c["id"] for c in cols])
         self.assertEqual(ctx.exception.code, 400)
         self.assertEqual(len(self.column_names()), 3)
+
+
+FIREWALL = (
+    "timestamp,src_ip,dst_ip,protocol,src_port,dst_port,action\n"
+    "2026-03-01 00:00:00,70.222.12.5,105.181.150.6,UDP,41000,161,allow\n"
+    "2026-03-01 00:00:01,70.222.12.64,105.181.150.6,UDP,41001,161,allow\n"
+    "2026-03-01 00:00:02,105.181.150.6,70.222.12.62,UDP,41002,514,allow\n"
+    "2026-03-01 00:00:03,70.222.12.9,105.181.150.6,TCP,41003,23,allow\n"
+    "2026-03-01 00:00:04,10.0.0.1,10.0.0.2,TCP,41004,80,deny\n"
+)
+
+POLICY = (
+    "Source\tDestination\tProtocol\tPort\tPurpose\n"
+    "70.222.12.0/26\t105.181.150.6\tUDP\t161\tSNMP\n"
+    "105.181.150.6\t70.222.12.62\tUDP\t514\tSyslog\n"
+    "70.222.12.0/26\t105.181.150.6\tTCP\t22, 23\tConfig Backup\n"
+    "203.0.113.0/24\t105.181.150.6\tUDP\t161\t미사용 정책\n"
+)
+
+
+class RuleApiTest(ServerCase):
+    """The multi searcher: paste a policy table, scan once, pick a rule."""
+
+    DATA = FIREWALL
+
+    def parsed(self):
+        return self.call("rules_parse", text=POLICY)
+
+    def run_rules(self, **extra):
+        spec = self.parsed()
+        payload = {"rows": spec["rows"], "mapping": spec["mapping"],
+                   "header": spec["header"]}
+        payload.update(extra)
+        return self.run_job("rules_run", **payload)
+
+    def test_parse_suggests_a_mapping_from_the_log_columns(self):
+        spec = self.parsed()
+        names = {c["id"]: c["name"] for c in spec["columns"]}
+        self.assertEqual(spec["header"][0], "Source")
+        self.assertEqual([names.get(m["column"]) for m in spec["mapping"]],
+                         ["src_ip", "dst_ip", "protocol", "dst_port", None])
+        self.assertEqual(spec["kinds"], ["ip", "ip", "equals", "ports", "ignore"])
+        self.assertEqual(len(spec["rows"]), 4)
+
+    def test_parse_rejects_text_that_is_not_a_table(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("rules_parse", text="   \n\n")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_run_reports_a_count_per_rule_and_filters_the_view(self):
+        job = self.run_rules()
+        self.assertEqual(job["status"], "done")
+        result = job["result"]
+        self.assertEqual([r["count"] for r in result["rules"]], [1, 1, 1, 0])
+        self.assertEqual(result["matched"], 3)
+        self.assertEqual(result["scanned"], 5)
+        state = self.call("state")
+        self.assertTrue(state["view"])
+        self.assertEqual(state["view_rows"], 3)
+        self.assertEqual([r["count"] for r in state["rules"]["rules"]], [1, 1, 1, 0])
+        self.call("rules_clear")
+
+    def test_rule_labels_name_the_purpose_column(self):
+        job = self.run_rules()
+        self.assertTrue(job["result"]["rules"][0]["label"].startswith("SNMP"))
+        self.call("rules_clear")
+
+    def test_rows_carry_the_rule_that_caught_them(self):
+        self.run_rules()
+        rows = self.call("rows", start=0, count=10)
+        self.assertEqual(set(rows["rules"].values()), {0, 1, 2})
+        self.call("rules_clear")
+
+    def test_selecting_one_rule_narrows_the_view(self):
+        self.run_rules()
+        res = self.call("rules_select", rule=2)
+        self.assertEqual(res["rows"], 1)
+        self.assertIn("Config Backup", res["state"]["view_label"])
+        rows = self.call("rows", start=0, count=10)
+        self.assertEqual(rows["rows"][0][5], "23")
+        self.assertEqual(self.call("rules_select", rule=None)["rows"], 3)
+        self.call("rules_clear")
+
+    def test_selecting_a_missing_rule_is_rejected(self):
+        self.run_rules()
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("rules_select", rule=99)
+        self.assertEqual(ctx.exception.code, 400)
+        self.call("rules_clear")
+
+    def test_select_before_a_run_is_rejected(self):
+        self.call("rules_clear")
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("rules_select", rule=0)
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_marking_a_rule_bookmarks_its_rows(self):
+        self.run_rules()
+        res = self.call("rules_mark", rule=0)
+        self.assertEqual(res["marked"], 1)
+        self.assertEqual(res["state"]["marks"], 1)
+        every = self.call("rules_mark", rule=None)
+        self.assertEqual(every["marked"], 3)
+        self.assertEqual(every["state"]["marks"], 3)
+        self.call("marks_clear")
+        self.call("rules_clear")
+
+    def test_clear_drops_both_the_result_and_the_view(self):
+        self.run_rules()
+        state = self.call("rules_clear")["state"]
+        self.assertFalse(state["view"])
+        self.assertIsNone(state["rules"])
+        self.assertEqual(self.call("rows", start=0, count=10)["rules"], {})
+
+    def test_scope_view_searches_inside_the_current_result(self):
+        self.run_job("filter", conditions=[], quick="UDP", scope="all")
+        job = self.run_rules(scope="view")
+        self.assertEqual(job["result"]["scanned"], 3)   # only the UDP rows
+        self.assertEqual([r["count"] for r in job["result"]["rules"]], [1, 1, 0, 0])
+        self.call("rules_clear")
+
+    def test_run_without_rows_is_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("rules_run", rows=[], mapping=[])
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_run_with_nothing_mapped_fails_the_job(self):
+        spec = self.parsed()
+        blank = [{"column": None, "kind": "ignore"} for _ in spec["mapping"]]
+        job = self.run_job("rules_run", rows=spec["rows"], mapping=blank)
+        self.assertEqual(job["status"], "error")
+        self.assertIn("조건", job["error"])

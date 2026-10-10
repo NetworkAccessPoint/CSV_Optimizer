@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import ops
+from . import ops, rules as rulelib
 from .index import Aborted
 from .jobs import Job, JobManager
 from .table import SaveError, Table
@@ -56,6 +56,11 @@ class Session:
         self.use_cache = use_cache
         self.workers = workers  # None = decide from the machine, 1 = single process
         self._stamp = 0
+        # The multi searcher: the last rule run, plus what it was built from so
+        # the panel can be restored and a single rule re-selected without a rescan.
+        self.rule_run: Optional[rulelib.RuleRunResult] = None
+        self.rule_spec: dict = {}
+        self.rule_pick: Optional[int] = None
         if path:
             self.open(path)
 
@@ -65,7 +70,24 @@ class Session:
                 self.table.close()
             self.table = Table(path, use_cache=self.use_cache)
             self.error = ""
+            self.clear_rules()
             return self.table
+
+    def clear_rules(self) -> None:
+        self.rule_run = None
+        self.rule_spec = {}
+        self.rule_pick = None
+
+    def rule_summary(self) -> Optional[dict]:
+        """What the multi-search panel shows: per-rule hit counts and the pick."""
+        if self.rule_run is None:
+            return None
+        summary = self.rule_run.as_dict()
+        summary["pick"] = self.rule_pick
+        summary["header"] = self.rule_spec.get("header", [])
+        summary["mapping"] = self.rule_spec.get("mapping", [])
+        summary["sources"] = self.rule_spec.get("sources", [])
+        return summary
 
     def require(self) -> Table:
         if self.table is None:
@@ -109,7 +131,26 @@ class Session:
             "edited_rows": len(table.edits) + len(table.new_rows),
             "marks": table.mark_count,
             "deleted_rows": table.seq.deleted_count,
+            "rules": self.rule_summary(),
         }
+
+
+def _rule_labels(rows: list, mapping: list, header: list) -> list:
+    """A readable name per rule: its description cell, else its cells joined."""
+    note = -1   # a column whose header reads like a note names the rule best
+
+    for i, name in enumerate(header):
+        if name.strip().lower() in rulelib.DESCRIPTION_NAMES:
+            note = i
+            break
+    labels = []
+    for position, cells in enumerate(rows):
+        text = cells[note].strip() if 0 <= note < len(cells) else ""
+        body = " / ".join(
+            cell.strip() for i, cell in enumerate(cells) if i != note and cell.strip()
+        )
+        labels.append(f"{text} · {body}" if text else body or f"규칙 {position + 1}")
+    return labels
 
 
 def _planned_workers(table: Table, requested: Optional[int]) -> int:
@@ -181,6 +222,7 @@ class Api:
             if self.session.table is not None:
                 self.session.table.close()  # release the previous mapping
             self.session.table = table
+            self.session.clear_rules()
         return {"rows": table.row_count}
 
     def do_rows(self, payload: dict) -> dict:
@@ -202,7 +244,22 @@ class Api:
                     if (rid < 0 or rid in table.edits)
                 },
                 "marked": [rid for rid in ids if table.is_marked(rid)],
+                "rules": self._rules_of(ids),
             }
+
+    def _rules_of(self, ids: list) -> dict:
+        """Which rule each visible row matched, for the row-number badge."""
+        run = self.session.rule_run
+        if run is None or not len(run.ids):
+            return {}
+        out = {}
+        for rid in ids:
+            if rid < 0:
+                continue
+            index = run.rule_for(rid)
+            if index >= 0:
+                out[str(rid)] = index
+        return out
 
     def do_row(self, payload: dict) -> dict:
         with self.session.lock:
@@ -413,6 +470,126 @@ class Api:
     def do_clear_view(self, payload: dict) -> dict:
         with self.session.lock:
             table = self.session.require()
+            table.view = None
+            table.view_label = ""
+            return {"state": self.session.state()}
+
+    # --------------------------------------------------------- multi searcher
+
+    def do_rules_parse(self, payload: dict) -> dict:
+        """Read a pasted rule table and suggest how it maps onto the log."""
+        text = str(payload.get("text", ""))
+        header, rows = rulelib.parse_table(text)
+        if not rows:
+            raise ValueError("붙여넣은 표에서 조건을 찾을 수 없습니다")
+        limit = int(payload.get("limit", 2000))
+        if len(rows) > limit:
+            raise ValueError(f"조건이 너무 많습니다 ({len(rows)}개). {limit}개까지 지원합니다.")
+        kinds = [
+            rulelib.guess_kind(
+                [row[i] for row in rows if i < len(row)],
+                header[i] if i < len(header) else "",
+            )
+            for i in range(len(header))
+        ]
+        with self.session.lock:
+            table = self.session.require()
+            mapping = rulelib.auto_mapping(table, header, rows, kinds)
+            return {
+                "header": header,
+                "rows": rows,
+                "kinds": kinds,
+                "mapping": mapping,
+                "columns": [c.as_dict() for c in table.columns],
+                "log_kinds": rulelib.column_kinds(table),
+            }
+
+    def do_rules_run(self, payload: dict) -> dict:
+        """Match every rule of the pasted table against the log, in one pass."""
+        rows = [[str(c) for c in row] for row in payload.get("rows") or []]
+        mapping = list(payload.get("mapping") or [])
+        header = [str(h) for h in payload.get("header") or []]
+        labels = payload.get("labels")
+        labels = [str(x) for x in labels] if labels else _rule_labels(rows, mapping, header)
+        scope_view = payload.get("scope") == "view"
+        if not rows:
+            raise ValueError("조건이 없습니다")
+
+        def run(job: Job) -> dict:
+            with self.session.lock:
+                table = self.session.require()
+                base = list(table.view) if (scope_view and table.view is not None) else None
+                ruleset = rulelib.build_ruleset(table, rows, mapping, labels)
+                if ruleset.empty:
+                    raise ValueError("유효한 조건이 없습니다. 열 연결을 확인해 주세요.")
+                result = None
+                if base is None:
+                    workers = _planned_workers(table, self.session.workers)
+                    if workers > 1:
+                        from .parallel import run_rules_parallel
+
+                        result = run_rules_parallel(
+                            table, rows, mapping, labels, workers=workers,
+                            progress=job.progress,
+                        )
+                if result is None:
+                    result = rulelib.run_rules(
+                        table, ruleset, ids=base, progress=job.progress
+                    )
+                self.session.rule_run = result
+                self.session.rule_spec = {
+                    "rows": rows, "mapping": mapping, "labels": labels,
+                    "header": header,
+                    "sources": [rule.source for rule in ruleset.rules],
+                }
+                self.session.rule_pick = None
+                table.view = result.ids
+                table.view_label = f"멀티 서치 {len(result.counts)}개 조건"
+                summary = self.session.rule_summary() or {}
+                summary["rows"] = len(result.ids)
+                return summary
+
+        return {"job": self.session.jobs.start("rules", run, "멀티 서치").as_dict()}
+
+    def do_rules_select(self, payload: dict) -> dict:
+        """Show only the rows of one rule, or of all of them again."""
+        raw = payload.get("rule")
+        rule = None if raw is None or raw == "" else int(raw)
+        with self.session.lock:
+            table = self.session.require()
+            run = self.session.rule_run
+            if run is None:
+                raise ValueError("먼저 멀티 서치를 실행해 주세요")
+            if rule is not None and not (0 <= rule < len(run.counts)):
+                raise ValueError("없는 조건 번호입니다")
+            table.view = run.ids_for(rule)
+            self.session.rule_pick = rule
+            label = f"멀티 서치 {len(run.counts)}개 조건"
+            if rule is not None:
+                label = f"조건 {rule + 1}: {run.labels[rule]}"
+            table.view_label = label
+            return {"rows": len(table.view), "state": self.session.state()}
+
+    def do_rules_mark(self, payload: dict) -> dict:
+        """Bookmark the rows of one rule, or of every rule, for later editing."""
+        raw = payload.get("rule")
+        rule = None if raw is None or raw == "" else int(raw)
+        replace = bool(payload.get("replace", True))
+        with self.session.lock:
+            table = self.session.require()
+            run = self.session.rule_run
+            if run is None:
+                raise ValueError("먼저 멀티 서치를 실행해 주세요")
+            if replace:
+                table.clear_marks()
+            ids = run.ids_for(rule)
+            table.mark_ids(ids, True)
+            return {"marked": len(ids), "state": self.session.state()}
+
+    def do_rules_clear(self, payload: dict) -> dict:
+        with self.session.lock:
+            table = self.session.require()
+            self.session.clear_rules()
             table.view = None
             table.view_label = ""
             return {"state": self.session.state()}

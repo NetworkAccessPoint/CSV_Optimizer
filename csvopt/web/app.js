@@ -118,6 +118,7 @@
     fillColumnSelects();
     renderColumnPanel();
     renderMarks();
+    renderRuleSummary(st.rules);
     return st;
   }
 
@@ -1193,6 +1194,182 @@
     } catch (err) { fail(err); }
   }
 
+  /* --------------------------------------------------- multi searcher
+
+     A whole policy table at once: paste it, check the column mapping, and one
+     scan says how many log lines each row of the table caught -- including the
+     rows that caught nothing, which is usually what a review is after. */
+
+  const RULE_KINDS = [
+    ['ip', 'IP / CIDR'], ['ports', '포트 목록'], ['equals', '같음'],
+    ['contains', '포함'], ['regex', '정규식'], ['number', '숫자'],
+    ['ignore', '사용 안 함'],
+  ];
+
+  const rules = { header: [], rows: [], mapping: [], sig: '', zeroOnly: false };
+
+  async function parseRules() {
+    const text = $('#rules-text').value;
+    if (!text.trim()) { say('조건 표를 붙여넣어 주세요.', true); return; }
+    try {
+      const res = await API.call('rules_parse', { text: text });
+      rules.header = res.header;
+      rules.rows = res.rows;
+      rules.mapping = res.mapping;
+      renderRuleMap();
+      $('#rules-run').disabled = false;
+      const unmapped = res.mapping.filter((m) => m.column == null && m.kind !== 'ignore').length;
+      say(`조건 ${API.num(res.rows.length)}개를 읽었습니다.`
+        + (unmapped ? ` 연결되지 않은 열이 ${unmapped}개 있습니다 — 아래에서 골라주세요.` : ' 열 연결을 확인하고 검색하세요.'));
+    } catch (err) { fail(err); }
+  }
+
+  function renderRuleMap() {
+    const box = $('#rules-map');
+    box.innerHTML = '';
+    box.classList.toggle('hidden', !rules.header.length);
+    if (!rules.header.length) return;
+    const cols = (state.server && state.server.columns) || [];
+    rules.header.forEach((name, i) => {
+      const spec = rules.mapping[i] || (rules.mapping[i] = { column: null, kind: 'equals' });
+      const sample = (rules.rows.find((r) => (r[i] || '').trim()) || [])[i] || '';
+      const title = el('b', null, name);
+      title.title = sample ? `예: ${sample}` : name;
+      const colSel = el('select');
+      colSel.appendChild(new Option('— 사용 안 함 —', ''));
+      cols.forEach((c) => colSel.appendChild(new Option(c.name, c.id)));
+      colSel.value = spec.column == null ? '' : spec.column;
+      colSel.onchange = () => {
+        spec.column = colSel.value === '' ? null : +colSel.value;
+        if (spec.column != null && spec.kind === 'ignore') {
+          spec.kind = 'equals';
+          renderRuleMap();
+        }
+      };
+      const kindSel = el('select');
+      RULE_KINDS.forEach(([v, l]) => kindSel.appendChild(new Option(l, v)));
+      kindSel.value = spec.kind || 'equals';
+      kindSel.onchange = () => { spec.kind = kindSel.value; };
+      box.appendChild(title);
+      box.appendChild(colSel);
+      box.appendChild(kindSel);
+    });
+  }
+
+  async function runRules() {
+    if (!rules.rows.length) { await parseRules(); if (!rules.rows.length) return; }
+    try {
+      const cores = (state.server && state.server.workers) || 1;
+      const job = await runJob('rules_run', {
+        rows: rules.rows,
+        mapping: rules.mapping,
+        header: rules.header,
+        scope: $('#rules-scope').checked ? 'view' : 'all',
+      }, cores > 1 ? `멀티 서치 · ${cores}코어` : '멀티 서치');
+      if (job.status === 'cancelled') { say('멀티 서치를 취소했습니다.'); return; }
+      grid.invalidate();
+      grid.setCursor(0, grid.cursor.c, false);
+      const st = await refreshState();
+      const zero = (st.rules ? st.rules.rules : []).filter((r) => !r.count).length;
+      say(`${API.num(job.result.matched)}행이 조건에 맞습니다`
+        + (zero ? ` · 한 건도 없는 조건 ${zero}개` : '')
+        + ` (${job.elapsed.toFixed(1)}초)`);
+    } catch (err) { fail(err); }
+  }
+
+  function renderRuleSummary(summary) {
+    const box = $('#rules-out');
+    if (!summary) {
+      rules.sig = '';
+      if (box.childElementCount) { box.innerHTML = ''; grid.setRuleLabels([]); }
+      return;
+    }
+    const sig = JSON.stringify([summary.pick, rules.zeroOnly, summary.rules.map((r) => r.count)]);
+    if (sig === rules.sig) return;    // state refreshes often; rebuild only on change
+    rules.sig = sig;
+    grid.setRuleLabels(summary.rules.map((r) => r.label));
+    box.innerHTML = '';
+    const zero = summary.rules.filter((r) => !r.count).length;
+
+    const head = el('div', 'head');
+    head.appendChild(el('b', null, `${API.num(summary.matched)}행`));
+    head.appendChild(el('span', 'muted', `/ 조건 ${summary.rules.length}개`
+      + (zero ? ` · 미매칭 ${zero}개` : '')));
+    head.appendChild(el('span', 'spacer'));
+    const all = el('button', 'btn tiny' + (summary.pick == null ? ' primary' : ' ghost'), '전체 보기');
+    all.onclick = () => pickRule(null);
+    head.appendChild(all);
+    box.appendChild(head);
+
+    const tools = el('div', 'head');
+    const only = el('label', 'chk');
+    const chk = el('input'); chk.type = 'checkbox'; chk.checked = rules.zeroOnly;
+    chk.onchange = () => { rules.zeroOnly = chk.checked; rules.sig = ''; renderRuleSummary(summary); };
+    only.appendChild(chk);
+    only.appendChild(document.createTextNode(' 미매칭 조건만'));
+    tools.appendChild(only);
+    tools.appendChild(el('span', 'spacer'));
+    const markBtn = el('button', 'btn tiny', '책갈피로');
+    markBtn.title = '지금 보고 있는 조건의 행을 모두 책갈피로 표시합니다.';
+    markBtn.onclick = async () => {
+      try {
+        const res = await API.call('rules_mark', { rule: summary.pick });
+        grid.invalidate();
+        await refreshState(res.state);
+        say(`${API.num(res.marked)}행을 책갈피로 표시했습니다.`);
+      } catch (err) { fail(err); }
+    };
+    const expBtn = el('button', 'btn tiny ghost', '내보내기');
+    expBtn.onclick = () => saveAsDialog();
+    tools.appendChild(markBtn);
+    tools.appendChild(expBtn);
+    box.appendChild(tools);
+
+    summary.rules.forEach((rule) => {
+      if (rules.zeroOnly && rule.count) return;
+      const row = el('div', 'rule'
+        + (rule.count ? '' : ' zero')
+        + (summary.pick === rule.index ? ' picked' : ''));
+      row.appendChild(el('span', 'no', String(rule.index + 1)));
+      row.appendChild(el('span', 'n', API.num(rule.count)));
+      const lbl = el('span', 'lbl', rule.label);
+      lbl.title = rule.label;
+      row.appendChild(lbl);
+      row.title = rule.count
+        ? `클릭하면 이 조건에 맞는 ${API.num(rule.count)}행만 봅니다.`
+        : '이 조건에 맞는 행이 없습니다.';
+      if (rule.count) row.onclick = () => pickRule(rule.index);
+      box.appendChild(row);
+    });
+  }
+
+  async function pickRule(index) {
+    try {
+      const res = await API.call('rules_select', { rule: index });
+      grid.invalidate();
+      grid.setCursor(0, grid.cursor.c, false);
+      await refreshState(res.state);
+      say(index == null
+        ? `전체 조건 결과 ${API.num(res.rows)}행`
+        : `조건 ${index + 1}번 ${API.num(res.rows)}행`);
+    } catch (err) { fail(err); }
+  }
+
+  async function clearRules() {
+    rules.header = [];
+    rules.rows = [];
+    rules.mapping = [];
+    rules.sig = '';
+    $('#rules-run').disabled = true;
+    renderRuleMap();
+    try {
+      const res = await API.call('rules_clear');
+      grid.invalidate();
+      await refreshState(res.state);
+      say('멀티 서치를 초기화했습니다.');
+    } catch (err) { fail(err); }
+  }
+
   function showTab(name) {
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
     document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== name));
@@ -1273,6 +1450,10 @@
     $('#mark-keep').onclick = () => marksDelete(true);
     $('#mark-prev').onclick = () => gotoMark(false);
     $('#mark-next').onclick = () => gotoMark(true);
+    $('#rules-parse').onclick = parseRules;
+    $('#rules-run').onclick = runRules;
+    $('#rules-clear').onclick = clearRules;
+    $('#rules-text').addEventListener('paste', () => setTimeout(parseRules, 0));
     $('#col-add').onclick = () => addColumn(null);
     $('#col-showall').onclick = () => { grid.columns.forEach((c) => { c.hidden = false; }); grid.renderHeader(); renderColumnPanel(); };
     $('#col-pick-all').onclick = (e) => {

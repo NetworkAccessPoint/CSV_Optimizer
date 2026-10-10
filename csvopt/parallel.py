@@ -25,6 +25,7 @@ from concurrent.futures import (
 )
 from typing import Callable, Optional, Sequence
 
+from . import rules as rulelib
 from .index import Aborted
 from .ops import Condition, _pick_literal, _prefilter_literals, compile_conditions, scan_range
 from .table import Table
@@ -185,3 +186,91 @@ def filter_parallel(
                 del out[limit:]
                 break
     return out
+
+
+def _rule_worker(payload) -> tuple[int, int, bytes, bytes]:
+    """Match one row range against a rule table; returns packed ids + rules."""
+    (index, path, use_cache, rows, mapping, labels, start, stop) = payload
+    table = _worker_table(path, use_cache)
+    ruleset = rulelib.build_ruleset(table, rows, mapping, labels)
+    ids, rule_of, _scanned = rulelib.scan_rules_range(
+        table, ruleset, start_rid=start, stop_rid=stop
+    )
+    return index, stop - start, ids.tobytes(), rule_of.tobytes()
+
+
+def run_rules_parallel(
+    table: Table,
+    rows: list,
+    mapping: list,
+    labels: list,
+    workers: int,
+    limit: Optional[int] = None,
+    min_segment_rows: int = MIN_SEGMENT_ROWS,
+    probe_timeout: float = POOL_PROBE_TIMEOUT,
+    progress: Optional[Callable[[int, int], bool]] = None,
+):
+    """Run a rule table across processes, or return None to scan inline.
+
+    The rules travel as the pasted text plus the mapping rather than as a
+    compiled :class:`~csvopt.rules.RuleSet`: the compiled form holds closures,
+    which do not pickle, and rebuilding it in a worker costs microseconds.
+    """
+    total = table.row_count
+    segments = _segments(total, workers, min_segment_rows)
+    if len(segments) < 2:
+        return None
+    # Rule rows that carry no condition are dropped at compile time, so the
+    # labels the result is reported under come from the compiled set, not from
+    # the pasted rows.  Workers compile the same way and agree on the indices.
+    compiled = [
+        rule.label
+        for rule in rulelib.build_ruleset(table, rows, mapping, labels).rules
+    ]
+    payloads = [
+        (i, table.path, True, rows, mapping, labels, start, stop)
+        for i, (start, stop) in enumerate(segments)
+    ]
+    global _POOL_UNAVAILABLE
+    results: dict[int, tuple[bytes, bytes]] = {}
+    done = 0
+    context = multiprocessing.get_context("spawn")
+    try:
+        executor = ProcessPoolExecutor(max_workers=workers, mp_context=context)
+    except (OSError, ValueError, RuntimeError, ImportError):
+        _POOL_UNAVAILABLE = True
+        return None
+    if not _pool_ready(executor, probe_timeout):
+        _POOL_UNAVAILABLE = True
+        _terminate(executor)
+        executor.shutdown(wait=False)
+        return None
+    try:
+        futures = [executor.submit(_rule_worker, payload) for payload in payloads]
+        for future in as_completed(futures):
+            index, scanned, packed_ids, packed_rules = future.result()
+            results[index] = (packed_ids, packed_rules)
+            done += scanned
+            if progress is not None and not progress(done, total):
+                _terminate(executor)
+                raise Aborted()
+    except BrokenExecutor:
+        _POOL_UNAVAILABLE = True
+        _terminate(executor)
+        return None
+    finally:
+        executor.shutdown(wait=True)
+
+    parts = []
+    for index, (start, stop) in enumerate(segments):
+        packed = results.get(index)
+        if not packed:
+            continue
+        ids = array("q")
+        rule_of = array("i")
+        if packed[0]:
+            ids.frombytes(packed[0])
+        if packed[1]:
+            rule_of.frombytes(packed[1])
+        parts.append((ids, rule_of, stop - start))
+    return rulelib.merge_runs(parts, compiled, limit)

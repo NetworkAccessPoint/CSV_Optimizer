@@ -39,6 +39,8 @@
       this.anchor = { r: 0, c: 0 };
       this.marks = new Set();       // row ids
       this.hits = new Set();        // "rid:col" keys highlighted by find
+      this.ruleOf = new Map();      // row id -> matched rule index (multi search)
+      this.ruleLabels = [];         // rule labels, for the gutter tooltip
       this.selectedColumns = new Set();  // column ids picked in the header
       this.lastColumnPick = null;        // anchor for Shift+click ranges
       this.levelCol = -1;
@@ -99,6 +101,12 @@
       this.cache.clear();
       this.pending.clear();
       this.marks.clear();   // bookmark state is re-sent with every page
+      this.ruleOf.clear();  // as is the matched rule per row
+      this.render();
+    }
+
+    setRuleLabels(labels) {
+      this.ruleLabels = labels || [];
       this.render();
     }
 
@@ -180,9 +188,13 @@
             start: start, rows: data.rows, ids: data.ids, edited: data.edited || {},
           });
           const marked = new Set(data.marked || []);
+          const rules = data.rules || {};
           for (const id of data.ids) {
             if (marked.has(id)) this.marks.add(id);
             else this.marks.delete(id);
+            const rule = rules[String(id)];
+            if (rule != null) this.ruleOf.set(id, rule);
+            else this.ruleOf.delete(id);
           }
           if (!this.autoFitted && data.rows.length) {
             this.autoFitted = true;
@@ -399,6 +411,17 @@
         const numCell = el.firstChild;
         numCell.style.width = NUM_W + 'px';
         numCell.textContent = data && data.id < 0 ? '+ ' + (r + 1) : (r + 1);
+        // The multi searcher writes which rule caught the row into the gutter.
+        const rule = data ? this.ruleOf.get(data.id) : undefined;
+        if (rule != null) {
+          numCell.className = 'cell rownum hasrule';
+          numCell.dataset.rule = rule + 1;
+          numCell.title = `조건 ${rule + 1}${this.ruleLabels[rule] ? ': ' + this.ruleLabels[rule] : ''}`;
+        } else {
+          numCell.className = 'cell rownum';
+          delete numCell.dataset.rule;
+          numCell.title = '';
+        }
         for (let k = 0; k < cols.length; k++) {
           const cell = el.childNodes[k + 1];
           const ci = colIdx[k];
