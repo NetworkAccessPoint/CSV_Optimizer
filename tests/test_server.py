@@ -6,7 +6,8 @@ import unittest
 import urllib.error
 import urllib.request
 
-from csvopt.server import serve
+from csvinsight import cli
+from csvinsight.server import serve
 
 DATA = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,tail\n"
 
@@ -42,7 +43,7 @@ class ServerCase(unittest.TestCase):
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "X-Csvopt-Token": self.server.token if token is None else token,
+                "X-CsvInsight-Token": self.server.token if token is None else token,
             },
         )
         with urllib.request.urlopen(req, timeout=10) as res:
@@ -69,7 +70,7 @@ class ServerTest(ServerCase):
     def test_rejects_foreign_host_header(self):
         req = urllib.request.Request(
             f"{self.base}/api/state", data=b"{}",
-            headers={"Host": "evil.example.com", "X-Csvopt-Token": self.server.token},
+            headers={"Host": "evil.example.com", "X-CsvInsight-Token": self.server.token},
         )
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(req, timeout=10)
@@ -82,7 +83,7 @@ class ServerTest(ServerCase):
 
     def test_index_page_and_static_assets(self):
         with urllib.request.urlopen(f"{self.base}/?t={self.server.token}", timeout=10) as res:
-            self.assertIn(b"csvopt", res.read())
+            self.assertIn("CSV Insight".encode(), res.read())
         for asset in ("app.js", "grid.js", "api.js", "style.css"):
             with urllib.request.urlopen(f"{self.base}/static/{asset}", timeout=10) as res:
                 self.assertEqual(res.status, 200)
@@ -318,6 +319,33 @@ class RuleApiTest(ServerCase):
             self.call("rules_parse", text="   \n\n")
         self.assertEqual(ctx.exception.code, 400)
 
+    def test_remap_guesses_from_a_sheet_being_edited(self):
+        # The sheet sends its own header and rows, with no pasted text.
+        res = self.call(
+            "rules_map",
+            header=["Source", "Destination", "Protocol", "Port"],
+            rows=[["70.222.12.0/26", "105.181.150.6", "UDP", "161"]],
+        )
+        names = {c["id"]: c["name"] for c in res["columns"]}
+        self.assertEqual([names.get(m["column"]) for m in res["mapping"]],
+                         ["src_ip", "dst_ip", "protocol", "dst_port"])
+        self.assertEqual(res["kinds"], ["ip", "ip", "equals", "ports"])
+
+    def test_remap_honours_kinds_the_user_set(self):
+        res = self.call(
+            "rules_map",
+            header=["Source", "Port"],
+            rows=[["70.222.12.5", "161"]],
+            kinds=["ip", "ignore"],
+        )
+        self.assertIsNone(res["mapping"][1]["column"])
+        self.assertEqual(res["mapping"][1]["kind"], "ignore")
+
+    def test_remap_without_rows_is_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("rules_map", header=["Source"], rows=[])
+        self.assertEqual(ctx.exception.code, 400)
+
     def test_run_reports_a_count_per_rule_and_filters_the_view(self):
         job = self.run_rules()
         self.assertEqual(job["status"], "done")
@@ -330,6 +358,42 @@ class RuleApiTest(ServerCase):
         self.assertEqual(state["view_rows"], 3)
         self.assertEqual([r["count"] for r in state["rules"]["rules"]], [1, 1, 1, 0])
         self.call("rules_clear")
+
+    def test_a_second_search_scans_the_file_again(self):
+        # The first result used to stay as the view, so every later search
+        # silently ran inside it -- and once one returned nothing, so did all.
+        first = self.run_rules()
+        self.assertEqual(first["result"]["scanned"], 5)
+        again = self.run_rules()
+        self.assertEqual(again["result"]["scanned"], 5)
+        self.assertEqual(again["result"]["matched"], first["result"]["matched"])
+        self.call("rules_clear")
+
+    def test_a_search_after_an_empty_result_still_scans(self):
+        spec = self.parsed()
+        nothing = [["203.0.113.9", "198.51.100.9", "UDP", "9999", "없음"]]
+        empty = self.run_job("rules_run", rows=nothing, mapping=spec["mapping"],
+                             header=spec["header"])
+        self.assertEqual(empty["result"]["matched"], 0)
+        after = self.run_rules()
+        self.assertEqual(after["result"]["scanned"], 5)
+        self.assertEqual(after["result"]["matched"], 3)
+        self.call("rules_clear")
+
+    def test_remap_is_not_fooled_by_an_active_filter(self):
+        # Guessing what a column holds has to look at the file: a filter that
+        # matched nothing would otherwise make every column look empty.
+        self.run_job("filter", conditions=[], quick="no-such-value", scope="all")
+        self.assertEqual(self.call("state")["view_rows"], 0)
+        res = self.call(
+            "rules_map",
+            header=["Source", "Destination"],
+            rows=[["70.222.12.0/26", "105.181.150.6"]],
+        )
+        names = {c["id"]: c["name"] for c in res["columns"]}
+        self.assertEqual([names.get(m["column"]) for m in res["mapping"]],
+                         ["src_ip", "dst_ip"])
+        self.call("clear_view")
 
     def test_rule_labels_name_the_purpose_column(self):
         job = self.run_rules()
@@ -401,3 +465,78 @@ class RuleApiTest(ServerCase):
         job = self.run_job("rules_run", rows=spec["rows"], mapping=blank)
         self.assertEqual(job["status"], "error")
         self.assertIn("조건", job["error"])
+
+
+class FixedTokenTest(ServerCase):
+    """A customer-facing install may want one stable address."""
+
+    def test_a_fixed_token_is_used_as_given(self):
+        server = serve(self.path, port=0, open_browser=False, token="shared-secret-123")
+        try:
+            self.assertEqual(server.token, "shared-secret-123")
+            self.assertIn("?t=shared-secret-123", server.url)
+        finally:
+            server.server_close()
+
+    def test_two_runs_differ_when_no_token_is_fixed(self):
+        a = serve(self.path, port=0, open_browser=False)
+        b = serve(self.path, port=0, open_browser=False)
+        try:
+            self.assertNotEqual(a.token, b.token)
+            self.assertGreaterEqual(len(a.token), 16)
+        finally:
+            a.server_close()
+            b.server_close()
+
+    def test_a_fixed_token_still_refuses_everything_else(self):
+        server = serve(self.path, port=0, open_browser=False, token="shared-secret-123")
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            req = urllib.request.Request(
+                f"{base}/api/state", data=b"{}",
+                headers={"X-CsvInsight-Token": "shared-secret-123"})
+            with urllib.request.urlopen(req, timeout=10) as res:
+                self.assertEqual(res.status, 200)
+            bad = urllib.request.Request(
+                f"{base}/api/state", data=b"{}",
+                headers={"X-CsvInsight-Token": "shared-secret-124"})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(bad, timeout=10)
+            self.assertEqual(ctx.exception.code, 403)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+class TokenOptionTest(unittest.TestCase):
+    """How the flag and the environment variable resolve."""
+
+    def setUp(self):
+        self.saved = os.environ.pop(cli.TOKEN_ENV, None)
+
+    def tearDown(self):
+        os.environ.pop(cli.TOKEN_ENV, None)
+        if self.saved is not None:
+            os.environ[cli.TOKEN_ENV] = self.saved
+
+    def test_nothing_given_means_a_random_token(self):
+        self.assertIsNone(cli._fixed_token(None))
+
+    def test_the_flag_wins_over_the_environment(self):
+        os.environ[cli.TOKEN_ENV] = "from-the-environment"
+        self.assertEqual(cli._fixed_token("from-the-flag"), "from-the-flag")
+
+    def test_the_environment_is_used_when_the_flag_is_absent(self):
+        os.environ[cli.TOKEN_ENV] = "from-the-environment"
+        self.assertEqual(cli._fixed_token(None), "from-the-environment")
+
+    def test_surrounding_space_is_trimmed(self):
+        self.assertEqual(cli._fixed_token("  padded-token  "), "padded-token")
+
+    def test_a_token_too_short_to_matter_is_refused(self):
+        with self.assertRaises(ValueError):
+            cli._fixed_token("abc")
+        with self.assertRaises(ValueError):
+            cli._fixed_token("   ")

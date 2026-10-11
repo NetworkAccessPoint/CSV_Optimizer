@@ -1,10 +1,12 @@
-# csvopt — 대용량 CSV / 로그 편집기
+<img src="packaging/icons/icon.png" width="96" align="right" alt="CSV Insight 아이콘">
+
+# CSV Insight — 대용량 CSV / 로그 편집기
 
 수 GB~수십 GB짜리 로그 CSV를 **통째로 메모리에 올리지 않고** 열어서 보고, 걸러내고, 고치고, 내보내는 도구입니다.
 파이썬 표준 라이브러리만 사용하므로 설치할 패키지가 없고, **Windows·macOS·Linux에서 동일하게** 동작합니다.
 UI는 로컬에서만 뜨는 작은 웹 서버 + 브라우저 화면입니다(외부로 나가는 통신 없음).
 
-![csvopt 화면](docs/screenshot-light.png)
+![CSV Insight 화면](docs/screenshot-light.png)
 
 검색어에 맞는 행을 한 번에 책갈피로 남긴 모습 (행 번호가 노란색):
 
@@ -20,36 +22,52 @@ UI는 로컬에서만 뜨는 작은 웹 서버 + 브라우저 화면입니다(�
 1. 이 폴더를 원하는 위치에 두고
 2. `run.bat` 을 더블클릭 → 브라우저가 열리고 파일 선택 창이 뜹니다.
    * CSV 파일을 **`run.bat` 위로 끌어다 놓으면** 그 파일이 바로 열립니다.
-   * 명령 프롬프트에서: `py -3 -m csvopt C:\logs\app.csv`
+   * 명령 프롬프트에서: `py -3 -m csvinsight C:\logs\app.csv`
 
 ### macOS
 
 1. `run.command` 를 더블클릭 (처음 한 번은 우클릭 → 열기)
-   * 터미널에서: `python3 -m csvopt ~/logs/app.csv`
+   * 터미널에서: `python3 -m csvinsight ~/logs/app.csv`
    * 실행 권한이 없다면 `chmod +x run.command`
 
 ### 어디서든
 
 ```bash
-python3 -m csvopt                 # 파일 없이 열고 UI에서 선택
-python3 -m csvopt app.csv         # 바로 열기
-python3 -m csvopt app.csv --port 8765 --no-browser
-pip install -e .                  # 선택: csvopt 명령으로 설치
+python3 -m csvinsight                 # 파일 없이 열고 UI에서 선택
+python3 -m csvinsight app.csv         # 바로 열기
+python3 -m csvinsight app.csv --port 8765 --no-browser
+pip install -e .                  # 선택: csvinsight 명령으로 설치
 ```
 
 주소에는 1회용 토큰이 붙습니다(`http://127.0.0.1:<포트>/?t=...`). 127.0.0.1에만 바인딩하고 토큰이
-없는 요청은 거부하므로, 같은 네트워크의 다른 사람이 열 수 없습니다.
+없는 요청은 거부하므로, 같은 네트워크의 다른 사람이 열 수 없습니다. 토큰은 같은 PC에서 도는
+다른 프로그램이나 브라우저로 방문한 웹사이트가 이 서버를 두드리는 것까지 막아줍니다.
+
+### 토큰 고정하기
+
+기본값은 실행할 때마다 새 토큰이라 주소를 즐겨찾기에 둘 수 없습니다. 고정 주소로 안내해야
+한다면 토큰을 정해 주세요.
+
+```bash
+csvinsight app.csv --token 정해둔값              # 최소 8자
+set CSVINSIGHT_TOKEN=정해둔값 && csvinsight app.csv   # Windows
+CSVINSIGHT_TOKEN=정해둔값 csvinsight app.csv          # macOS/Linux
+```
+
+명령줄은 같은 PC의 다른 사용자에게 보입니다(`ps`, 작업 관리자). 그래서 **환경변수 쪽을
+권합니다.** 고정 토큰을 쓰면 실행할 때 그 사실을 알려줍니다 — 주소를 아는 사람은 그 PC에서
+열려 있는 파일을 보고 고칠 수 있으니, 아무에게나 알려줄 주소는 아닙니다.
 
 ### 실행 파일(exe)로 쓰기
 
 파이썬 설치가 곤란한 PC(사내 표준 이미지 등)에서는 단일 실행 파일로 만들어 쓸 수 있습니다.
 
-* **직접 빌드**: `packaging\build_windows.bat` 더블클릭 → `dist\csvopt.exe` (약 8 MB, 그 자체로 완결)
-  * macOS/Linux: `packaging/build_macos.sh` → `dist/csvopt`
+* **직접 빌드**: `packaging\build_windows.bat` 더블클릭 → `dist\csvinsight.exe` (약 8 MB, 그 자체로 완결)
+  * macOS/Linux: `packaging/build_macos.sh` → `dist/csvinsight`
 * **CI로 빌드**: `.github/workflows/build.yml` 이 Windows·macOS·Linux 실행 파일을 만들어
   Actions 아티팩트로 올려줍니다. 태그를 밀거나 workflow_dispatch 로 직접 실행하면 됩니다.
 
-exe 는 CLI와 UI를 모두 담고 있어 `csvopt.exe app.csv`, `csvopt.exe grep ...` 처럼 그대로 쓰며,
+exe 는 CLI와 UI를 모두 담고 있어 `csvinsight.exe app.csv`, `csvinsight.exe grep ...` 처럼 그대로 쓰며,
 CSV 파일을 exe 위로 끌어다 놓아도 열립니다. (멀티프로세스 필터도 exe 안에서 동작합니다.)
 
 ## 무엇이 되나
@@ -61,6 +79,10 @@ CSV 파일을 exe 위로 끌어다 놓아도 열립니다. (멀티프로세스 �
 * 가상 스크롤 그리드, 행 번호 고정, 열 너비 자동 맞춤 · 드래그 조절 · 왼쪽 고정 · 숨기기
 * `level` / `severity` 열을 자동으로 찾아 ERROR·FATAL은 빨강, WARN은 주황으로 표시
 * 라이트/다크 테마, 행 높이 3단계(줄바꿈 보기 포함)
+* 값 분포·찾기·북마크·멀티 서치·열 패널은 **필요할 때만 꺼내는 서랍**입니다.
+  기본은 닫혀 있어 표가 화면을 다 쓰고, 상단 **편의 기능** 버튼이나
+  <kbd>Ctrl/⌘+B</kbd> 로 열고 닫습니다(마지막에 보던 탭을 기억합니다).
+  패널 왼쪽 경계를 끌면 너비도 조절됩니다
 
 **찾기**
 
@@ -77,8 +99,20 @@ CSV 파일을 exe 위로 끌어다 놓아도 열립니다. (멀티프로세스 �
 
 **멀티 로그 서처 — 조건표 한 장을 통째로**
 
-방화벽 정책표처럼 "조건이 여러 줄인 표"를 엑셀·워드에서 복사해 **멀티 서치** 패널에 그대로
-붙여넣으면, 그 표 전체를 **한 번의 스캔**으로 로그에 맞춰 봅니다.
+방화벽 정책표처럼 "조건이 여러 줄인 표"를 **멀티 서치** 패널의 엑셀 모양 입력칸에
+붙여넣거나 직접 입력하면, 그 표 전체를 **한 번의 스캔**으로 로그에 맞춰 봅니다.
+
+* 입력칸은 **스프레드시트**입니다. 셀을 직접 고치고, 줄·열을 더하거나 지우고,
+  엑셀에서 복사한 블록을 커서 위치에 붙여넣을 수 있습니다
+  (<kbd>Enter</kbd>/<kbd>↑</kbd><kbd>↓</kbd> 줄 이동, <kbd>Tab</kbd> 칸 이동)
+* 열 너비는 **고정**입니다. 멋대로 바뀌지 않고, 열 경계를 끌면 조절되며
+  경계를 더블클릭하면 그 열 내용에 맞춰집니다
+* **각 열 머리에 그 열이 로그의 어느 열과 비교되는지가 드롭다운으로 붙어 있습니다.**
+  자동으로 잡아주되 어디로 잡혔는지 항상 보이고, 틀렸으면 그 자리에서 바꿉니다.
+  연결되지 않은 열은 노란색으로 표시됩니다
+* 검색하면 **조건별 건수가 그 줄 오른쪽에 바로 찍힙니다.** 0건은 빨간색이고,
+  건수를 클릭하면 그 조건에 맞는 행만 봅니다
+* 패널 왼쪽 경계를 끌면 넓어집니다(너비는 기억됩니다)
 
 * 한 줄 안의 칸들은 **AND**, 줄과 줄 사이는 **OR** — 정책표를 읽는 방식 그대로입니다
 * `70.222.12.0/26` 같은 **CIDR**, `22, 23` 같은 **포트 목록**, 프로토콜, 포함·정규식·숫자 비교 지원
@@ -143,6 +177,7 @@ Windows/Linux는 `Ctrl`, macOS는 `⌘` 입니다. UI의 `?` 버튼에서도 볼
 | `Ctrl/⌘ + D` | 선택 범위 아래로 채우기 |
 | `Delete` | 선택 셀 비우기 |
 | `Ctrl/⌘ + Z`, `Shift+Z` | 실행 취소 / 다시 실행 |
+| `Ctrl/⌘ + B`, `Esc` | 편의 기능 패널 열기·닫기 / 닫기 |
 | `Ctrl/⌘ + F`, `Enter` | 찾기 패널 / 다음 결과 |
 | `Ctrl/⌘ + G` | 행 번호로 이동 |
 | `Ctrl/⌘ + S`, `O` | 저장 / 파일 열기 |
@@ -157,11 +192,11 @@ Windows/Linux는 `Ctrl`, macOS는 `⌘` 입니다. UI의 `?` 버튼에서도 볼
 UI 없이 쓸 수 있는 하위 명령이 있습니다. 배치 처리나 원격 서버에서 유용합니다.
 
 ```bash
-python3 -m csvopt info app.csv                     # 인코딩·구분자·행 수·열 미리보기
-python3 -m csvopt grep app.csv -w level=ERROR -o errors.csv
-python3 -m csvopt grep app.csv -c "timeout" --op contains
-python3 -m csvopt grep app.csv -e "user:\d{5}"     # 정규식
-python3 -m csvopt convert app.csv -o excel.csv --encoding utf-8-sig --newline crlf
+python3 -m csvinsight info app.csv                     # 인코딩·구분자·행 수·열 미리보기
+python3 -m csvinsight grep app.csv -w level=ERROR -o errors.csv
+python3 -m csvinsight grep app.csv -c "timeout" --op contains
+python3 -m csvinsight grep app.csv -e "user:\d{5}"     # 정규식
+python3 -m csvinsight convert app.csv -o excel.csv --encoding utf-8-sig --newline crlf
 ```
 
 ## 성능
@@ -255,19 +290,20 @@ python3 -m csvopt convert app.csv -o excel.csv --encoding utf-8-sig --newline cr
 ## 개발
 
 ```bash
-python3 tools/run_tests.py                      # 163개 테스트 (타임아웃 포함)
+python3 tools/run_tests.py                      # 190개 테스트 (타임아웃 포함)
 python3 tools/run_pool_tests.py                 # 워커 프로세스 테스트
 python3 tools/make_sample_log.py sample.csv --rows 2000000   # 시험용 로그 생성
 python3 tools/make_sample_firewall_log.py fw.csv --rows 300000  # 멀티 서치 시험용
-python3 -m PyInstaller --clean --noconfirm packaging/csvopt.spec   # 실행 파일 빌드
+python3 tools/make_icons.py                     # 아이콘 다시 만들기 (Pillow 필요)
+python3 -m PyInstaller --clean --noconfirm packaging/csvinsight.spec   # 실행 파일 빌드
 ```
 
 GitHub Actions 가 Windows·macOS·Linux × Python 3.9/3.12 에서 테스트를 돌리고,
-세 OS 의 실행 파일을 만들어 아티팩트로 올립니다(`csvopt-windows`, `csvopt-macos`,
-`csvopt-linux`). 실행 파일이 필요하면 Actions 탭의 최신 실행에서 받으면 됩니다.
+세 OS 의 실행 파일을 만들어 아티팩트로 올립니다(`csvinsight-windows`, `csvinsight-macos`,
+`csvinsight-linux`). 실행 파일이 필요하면 Actions 탭의 최신 실행에서 받으면 됩니다.
 
 ```
-csvopt/
+csvinsight/
   index.py    파일 스캔 · 인코딩/구분자/줄바꿈 판별 · 메모리 맵 인덱스 캐시
   bitset.py   행 비트셋 (책갈피 · 삭제 표시)
   table.py    행 시퀀스(비트셋 + 블록 Fenwick) · 편집 오버레이 · 책갈피 · 실행취소 · 저장
@@ -277,15 +313,16 @@ csvopt/
   server.py   localhost 전용 HTTP API (토큰 인증)
   parallel.py 워커 프로세스 필터
   cli.py      open / info / grep / convert
-  web/        UI (의존성 없는 순수 JS)
+  web/        UI (의존성 없는 순수 JS, sheet.js = 조건 입력 스프레드시트)
 packaging/    PyInstaller 스펙과 빌드 스크립트
+  icons/      아이콘 원본(source.webp)과 생성물(.ico/.icns/.png)
 ```
 
 ## 대용량 파일을 다룰 때
 
 * **디스크 여유**: 인덱스 캐시는 행당 8바이트입니다(1억 행 ≈ 800 MB). 원본 옆에 만들 수 없으면
   임시 폴더에 만들고, 그것도 막히면 메모리에 둡니다. 캐시를 아예 만들지 않으려면
-  `python3 -m csvopt open big.csv --no-cache` 로 실행하세요.
+  `python3 -m csvinsight open big.csv --no-cache` 로 실행하세요.
 * **저장**: 저장은 파일 전체를 다시 쓰므로 같은 디스크에 원본 크기만큼 여유가 필요합니다
   (부족하면 저장을 시작하기 전에 알려줍니다). `.bak` 백업까지 켜면 두 배가 필요하니
   10 GB급 파일에서는 백업 체크를 끄거나 "다른 이름으로 저장"을 쓰는 편이 낫습니다.

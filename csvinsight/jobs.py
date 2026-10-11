@@ -78,7 +78,7 @@ class JobManager:
             finally:
                 job.finished = time.time()
 
-        threading.Thread(target=run, name=f"csvopt-{job.id}", daemon=True).start()
+        threading.Thread(target=run, name=f"csvinsight-{job.id}", daemon=True).start()
         return job
 
     def get(self, job_id: str) -> Optional[Job]:

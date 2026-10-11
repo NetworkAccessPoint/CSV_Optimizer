@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "csvopt"
+name = "csvinsight"
 version = "0.1.0"
 description = "대용량 CSV/로그 파일을 위한 뷰어 겸 편집기 (표준 라이브러리만 사용)"
 readme = "README.md"
@@ -23,10 +23,10 @@ classifiers = [
 dependencies = []
 
 [project.scripts]
-csvopt = "csvopt.cli:main"
+csvinsight = "csvinsight.cli:main"
 
 [tool.setuptools]
-packages = ["csvopt"]
+packages = ["csvinsight"]
 
 [tool.setuptools.package-data]
-csvopt = ["web/*"]
+csvinsight = ["web/*"]

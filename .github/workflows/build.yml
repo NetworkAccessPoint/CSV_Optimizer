@@ -33,9 +33,9 @@ jobs:
         shell: bash
         run: |
           python tools/make_sample_log.py sample.csv --rows 20000
-          python -m csvopt info sample.csv
-          python -m csvopt grep sample.csv -w level=ERROR -o errors.csv
-          python -m csvopt convert sample.csv -o out.csv --encoding utf-8-sig --newline crlf
+          python -m csvinsight info sample.csv
+          python -m csvinsight grep sample.csv -w level=ERROR -o errors.csv
+          python -m csvinsight convert sample.csv -o out.csv --encoding utf-8-sig --newline crlf
 
   package:
     name: package (${{ matrix.os }})
@@ -49,16 +49,16 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: csvopt-windows
-            binary: dist/csvopt.exe
+            artifact: csvinsight-windows
+            binary: dist/csvinsight.exe
             mirror: builds/windows
           - os: macos-latest
-            artifact: csvopt-macos
-            binary: dist/csvopt
+            artifact: csvinsight-macos
+            binary: dist/csvinsight
             mirror: builds/macos
           - os: ubuntu-latest
-            artifact: csvopt-linux
-            binary: dist/csvopt
+            artifact: csvinsight-linux
+            binary: dist/csvinsight
             mirror: ""
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
       - name: Install PyInstaller
         run: python -m pip install --upgrade pyinstaller
       - name: Build
-        run: python -m PyInstaller --clean --noconfirm packaging/csvopt.spec
+        run: python -m PyInstaller --clean --noconfirm packaging/csvinsight.spec
       - name: Smoke test the executable
         shell: bash
         run: |

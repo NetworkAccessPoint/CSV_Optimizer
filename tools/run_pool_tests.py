@@ -20,7 +20,7 @@ if ROOT not in sys.path:
 
 
 def main() -> int:
-    os.environ["CSVOPT_TEST_POOL"] = "1"
+    os.environ["CSVINSIGHT_TEST_POOL"] = "1"
     from tests import test_parallel
 
     suite = unittest.defaultTestLoader.loadTestsFromModule(test_parallel)

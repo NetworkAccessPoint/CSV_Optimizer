@@ -1,9 +1,10 @@
 import os
 import tempfile
 import unittest
+from array import array
 
-from csvopt import rules
-from csvopt.table import Table
+from csvinsight import rules
+from csvinsight.table import Table
 
 # A log shaped like a firewall export: the two directions of a managed device.
 LOG = (
@@ -166,6 +167,18 @@ class RunCase(unittest.TestCase):
         names = {c.id: c.name for c in self.table.columns}
         self.assertEqual([names.get(s["column"]) for s in mapping],
                          ["src_ip", "dst_ip", "dst_port"])
+
+    def test_sampling_ignores_an_active_filter(self):
+        self.table.view = array("q", [])          # a filter that matched nothing
+        try:
+            kinds = rules.column_kinds(self.table)
+            self.assertEqual(kinds[1], "ip")      # src_ip still reads as addresses
+            mapping = rules.auto_mapping(self.table, self.header, self.rows)
+            positions = {c.id: i for i, c in enumerate(self.table.columns)}
+            self.assertEqual([positions.get(s["column"]) for s in mapping],
+                             [1, 2, 3, 5, None])
+        finally:
+            self.table.view = None
 
     def test_every_rule_counts_its_own_rows(self):
         result = rules.run_rules(self.table, self.build())

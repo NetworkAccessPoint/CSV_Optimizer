@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from array import array
 
-from csvopt import ops
-from csvopt.table import Table
+from csvinsight import ops
+from csvinsight.table import Table
 
 DATA = (
     "ts,level,service,latency,msg\n"

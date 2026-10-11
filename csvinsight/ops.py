@@ -1,4 +1,4 @@
-"""Query operations over a :class:`~csvopt.table.Table`: filter, sort, search,
+"""Query operations over a :class:`~csvinsight.table.Table`: filter, sort, search,
 replace and per-column statistics.
 
 Every operation streams the table instead of materialising it, and takes an

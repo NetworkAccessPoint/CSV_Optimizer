@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from csvopt.table import Fenwick, RowSequence, Table
+from csvinsight.table import Fenwick, RowSequence, Table
 
 SAMPLE = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,\"multi\nline\"\n4,INFO,tail\n"
 
@@ -258,7 +258,7 @@ class BookmarkTest(TempFileTest):
         self.assertEqual(table.mark_count, 1)
 
     def test_mark_ids_from_a_search(self):
-        from csvopt import ops
+        from csvinsight import ops
 
         table = self.table()
         level = table.columns[1].id
@@ -332,7 +332,7 @@ class BookmarkTest(TempFileTest):
 
 class BulkSequenceTest(unittest.TestCase):
     def test_bitset_backed_sequence_handles_mass_deletion(self):
-        from csvopt.bitset import Bitset
+        from csvinsight.bitset import Bitset
 
         seq = RowSequence(100000)
         keep = Bitset(100000)
@@ -347,7 +347,7 @@ class BulkSequenceTest(unittest.TestCase):
         self.assertEqual(list(seq.iter_ids())[:3], [0, 1000, 2000])
 
     def test_snapshot_restores_previous_shape(self):
-        from csvopt.bitset import Bitset
+        from csvinsight.bitset import Bitset
 
         seq = RowSequence(5000)
         seq.delete(10)
@@ -371,7 +371,7 @@ class DiskGuardTest(TempFileTest):
         import shutil as _shutil
         from collections import namedtuple
 
-        from csvopt.table import SaveError
+        from csvinsight.table import SaveError
 
         usage = namedtuple("usage", "total used free")
         table = self.table()

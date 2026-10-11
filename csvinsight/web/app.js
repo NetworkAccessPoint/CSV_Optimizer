@@ -1,4 +1,4 @@
-/* csvopt application wiring: toolbar, filters, side panels, dialogs, keyboard. */
+/* csvinsight application wiring: toolbar, filters, side panels, dialogs, keyboard. */
 (function () {
   'use strict';
 
@@ -97,7 +97,6 @@
       return st;
     }
     $('#empty').classList.add('hidden');
-    $('#side').classList.remove('hidden');
     $('#grid').classList.remove('hidden');
     $('#file-name').textContent = st.name + (st.dirty ? ' •' : '');
     $('#file-name').title = st.path;
@@ -116,6 +115,7 @@
     grid.setColumns(st.columns, true);
     grid.setTotal(st.rows);
     fillColumnSelects();
+    if (rules.sheet) rules.sheet.setColumns(st.columns);
     renderColumnPanel();
     renderMarks();
     renderRuleSummary(st.rules);
@@ -595,7 +595,7 @@
   async function markSearch(replace) {
     const needle = $('#find-needle').value.trim() || $('#quick').value.trim();
     if (!needle) {
-      showTab('find');
+      openPanel('find');
       $('#find-needle').focus();
       say('책갈피로 남길 검색어를 입력하세요.');
       return;
@@ -616,7 +616,7 @@
         ? `책갈피 표시 중 · ${state.server.workers}코어` : '책갈피 표시 중');
       grid.invalidate();
       await refreshState(job.result.state);
-      showTab('marks');
+      openPanel('marks');
       say(`${API.num(job.result.matched)}행을 책갈피로 표시했습니다.`);
     } catch (err) { fail(err); }
   }
@@ -753,7 +753,7 @@
       { label: '정렬 해제', action: () => { grid.columns.forEach((c) => { c.sort = 0; }); grid.renderHeader(); applyFilters(false); } },
       '-',
       { label: '이 열로 필터…', action: () => { state.filters.push({ col: col.id, op: 'contains', value: '' }); editFilter(state.filters.length - 1); } },
-      { label: '값 분포 보기', action: () => { showTab('facets'); $('#facet-col').value = col.id; runFacets(); } },
+      { label: '값 분포 보기', action: () => { openPanel('facets'); $('#facet-col').value = col.id; runFacets(); } },
       '-',
       { label: col.pinned ? '고정 해제' : '왼쪽에 고정', action: () => { col.pinned = !col.pinned; grid.renderHeader(); renderColumnPanel(); } },
       { label: '열 숨기기', action: () => { col.hidden = true; grid.renderHeader(); renderColumnPanel(); } },
@@ -1008,6 +1008,7 @@
     add(MOD + '+D', '선택 범위 아래로 채우기');
     add('Delete', '선택 셀 비우기');
     add(MOD + '+Z / ' + MOD + '+Shift+Z', '실행 취소 / 다시 실행');
+    add(MOD + '+B', '편의 기능 패널 열고 닫기 (Esc: 닫기)');
     add(MOD + '+F', '찾기 패널');
     add(MOD + '+Enter', '다음 검색 결과');
     add(MOD + '+G', '행으로 이동');
@@ -1133,10 +1134,15 @@
     }
     if (mod && key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
     if (mod && key.toLowerCase() === 'd') { e.preventDefault(); fillDown(); return; }
+    if (mod && key.toLowerCase() === 'b') {
+      e.preventDefault();
+      if (panelOpen()) closePanel(); else openPanel();
+      return;
+    }
     if (mod && key.toLowerCase() === 's') { e.preventDefault(); save(); return; }
     if (mod && key.toLowerCase() === 'o') { e.preventDefault(); openDialog(); return; }
     if (mod && key.toLowerCase() === 'g') { e.preventDefault(); gotoDialog(); return; }
-    if (mod && key.toLowerCase() === 'f') { e.preventDefault(); showTab('find'); $('#find-needle').focus(); return; }
+    if (mod && key.toLowerCase() === 'f') { e.preventDefault(); openPanel('find'); $('#find-needle').focus(); return; }
     if (mod && key === 'Enter') { e.preventDefault(); gotoHit(e.shiftKey ? -1 : 1); return; }
     if (mod && (key === '-' || key === 'Backspace')) { e.preventDefault(); deleteRows(grid.selectedRowIds()); return; }
     if (mod && key === '+') { e.preventDefault(); insertRow(grid.cursor.r + 1); return; }
@@ -1196,74 +1202,72 @@
 
   /* --------------------------------------------------- multi searcher
 
-     A whole policy table at once: paste it, check the column mapping, and one
-     scan says how many log lines each row of the table caught -- including the
-     rows that caught nothing, which is usually what a review is after. */
+     A whole policy table at once. The conditions are edited as a sheet, each
+     column carrying the log column it is compared against, so a wrong guess
+     is visible on the column itself and fixed with one dropdown. One scan
+     then says how many log lines each row caught -- including the rows that
+     caught nothing, which is usually what a review is after. */
 
-  const RULE_KINDS = [
-    ['ip', 'IP / CIDR'], ['ports', '포트 목록'], ['equals', '같음'],
-    ['contains', '포함'], ['regex', '정규식'], ['number', '숫자'],
-    ['ignore', '사용 안 함'],
-  ];
+  const rules = { sheet: null, summary: null, sig: '', zeroOnly: false, lines: [] };
 
-  const rules = { header: [], rows: [], mapping: [], sig: '', zeroOnly: false };
+  function sheetPayload() {
+    const live = rules.sheet.filled();
+    return {
+      header: rules.sheet.header.map((h) => String(h || '')),
+      rows: live.map((entry) => entry.cells),
+      mapping: rules.sheet.mapping.map((m) => ({ column: m.column, kind: m.kind })),
+      lines: live.map((entry) => entry.index),      // sheet row per rule
+    };
+  }
 
-  async function parseRules() {
-    const text = $('#rules-text').value;
-    if (!text.trim()) { say('조건 표를 붙여넣어 주세요.', true); return; }
+  function mappedCount() {
+    return rules.sheet.mapping.filter((m) => m.column != null && m.kind !== 'ignore').length;
+  }
+
+  /* Pasting into an empty sheet goes through the server, which detects the
+     header row and guesses the mapping in the same step. */
+  async function loadPastedTable(text) {
     try {
       const res = await API.call('rules_parse', { text: text });
-      rules.header = res.header;
-      rules.rows = res.rows;
-      rules.mapping = res.mapping;
-      renderRuleMap();
-      $('#rules-run').disabled = false;
-      const unmapped = res.mapping.filter((m) => m.column == null && m.kind !== 'ignore').length;
-      say(`조건 ${API.num(res.rows.length)}개를 읽었습니다.`
-        + (unmapped ? ` 연결되지 않은 열이 ${unmapped}개 있습니다 — 아래에서 골라주세요.` : ' 열 연결을 확인하고 검색하세요.'));
+      rules.sheet.load(res.header, res.rows, res.mapping);
+      clearRuleResult();
+      reportMapping(res.rows.length, res.mapping);
     } catch (err) { fail(err); }
   }
 
-  function renderRuleMap() {
-    const box = $('#rules-map');
-    box.innerHTML = '';
-    box.classList.toggle('hidden', !rules.header.length);
-    if (!rules.header.length) return;
+  async function autoMap() {
+    const payload = sheetPayload();
+    if (!payload.rows.length) { say('조건을 먼저 입력하세요.', true); return; }
+    try {
+      const res = await API.call('rules_map', { header: payload.header, rows: payload.rows });
+      rules.sheet.mapping = res.mapping.map((m) => ({ column: m.column, kind: m.kind }));
+      rules.sheet.render();
+      clearRuleResult();
+      reportMapping(payload.rows.length, res.mapping);
+    } catch (err) { fail(err); }
+  }
+
+  function reportMapping(count, mapping) {
     const cols = (state.server && state.server.columns) || [];
-    rules.header.forEach((name, i) => {
-      const spec = rules.mapping[i] || (rules.mapping[i] = { column: null, kind: 'equals' });
-      const sample = (rules.rows.find((r) => (r[i] || '').trim()) || [])[i] || '';
-      const title = el('b', null, name);
-      title.title = sample ? `예: ${sample}` : name;
-      const colSel = el('select');
-      colSel.appendChild(new Option('— 사용 안 함 —', ''));
-      cols.forEach((c) => colSel.appendChild(new Option(c.name, c.id)));
-      colSel.value = spec.column == null ? '' : spec.column;
-      colSel.onchange = () => {
-        spec.column = colSel.value === '' ? null : +colSel.value;
-        if (spec.column != null && spec.kind === 'ignore') {
-          spec.kind = 'equals';
-          renderRuleMap();
-        }
-      };
-      const kindSel = el('select');
-      RULE_KINDS.forEach(([v, l]) => kindSel.appendChild(new Option(l, v)));
-      kindSel.value = spec.kind || 'equals';
-      kindSel.onchange = () => { spec.kind = kindSel.value; };
-      box.appendChild(title);
-      box.appendChild(colSel);
-      box.appendChild(kindSel);
-    });
+    const named = mapping
+      .map((m) => (cols.find((c) => c.id === m.column) || {}).name)
+      .filter(Boolean);
+    const loose = mapping.filter((m) => m.column == null && m.kind !== 'ignore').length;
+    say(`조건 ${API.num(count)}줄 · 연결된 열: ${named.join(', ') || '없음'}`
+      + (loose ? ` · 연결 안 된 열 ${loose}개는 머리의 드롭다운에서 골라주세요.` : ''));
   }
 
   async function runRules() {
-    if (!rules.rows.length) { await parseRules(); if (!rules.rows.length) return; }
+    const payload = sheetPayload();
+    if (!payload.rows.length) { say('조건을 먼저 입력하세요.', true); return; }
+    if (!mappedCount()) { say('연결된 열이 없습니다. 각 열 머리의 드롭다운에서 로그 열을 골라주세요.', true); return; }
+    rules.lines = payload.lines;
     try {
       const cores = (state.server && state.server.workers) || 1;
       const job = await runJob('rules_run', {
-        rows: rules.rows,
-        mapping: rules.mapping,
-        header: rules.header,
+        rows: payload.rows,
+        mapping: payload.mapping,
+        header: payload.header,
         scope: $('#rules-scope').checked ? 'view' : 'all',
       }, cores > 1 ? `멀티 서치 · ${cores}코어` : '멀티 서치');
       if (job.status === 'cancelled') { say('멀티 서치를 취소했습니다.'); return; }
@@ -1277,17 +1281,44 @@
     } catch (err) { fail(err); }
   }
 
+  /* The sheet shows each rule's hits on its own line; the list underneath is
+     the same numbers sorted for reading, with the zero rows called out. */
+  function paintSheetCounts(summary) {
+    if (!rules.sheet) return;
+    if (!summary) { rules.sheet.setCounts(null); return; }
+    const counts = {};
+    summary.rules.forEach((rule, index) => {
+      const line = rules.lines && rules.lines[index];
+      counts[line == null ? index : line] = rule.count;
+    });
+    rules.sheet.setCounts(counts);
+    rules.sheet.setPicked(
+      summary.pick == null ? null
+        : (rules.lines ? rules.lines[summary.pick] : summary.pick));
+  }
+
+  function clearRuleResult() {
+    rules.summary = null;
+    rules.sig = '';
+    if (rules.sheet) { rules.sheet.setCounts(null); rules.sheet.setPicked(null); }
+    $('#rules-out').innerHTML = '';
+    if (grid) grid.setRuleLabels([]);
+  }
+
   function renderRuleSummary(summary) {
     const box = $('#rules-out');
     if (!summary) {
       rules.sig = '';
       if (box.childElementCount) { box.innerHTML = ''; grid.setRuleLabels([]); }
+      if (rules.sheet) { rules.sheet.setCounts(null); rules.sheet.setPicked(null); }
       return;
     }
     const sig = JSON.stringify([summary.pick, rules.zeroOnly, summary.rules.map((r) => r.count)]);
     if (sig === rules.sig) return;    // state refreshes often; rebuild only on change
     rules.sig = sig;
+    rules.summary = summary;
     grid.setRuleLabels(summary.rules.map((r) => r.label));
+    paintSheetCounts(summary);
     box.innerHTML = '';
     const zero = summary.rules.filter((r) => !r.count).length;
 
@@ -1330,7 +1361,8 @@
       const row = el('div', 'rule'
         + (rule.count ? '' : ' zero')
         + (summary.pick === rule.index ? ' picked' : ''));
-      row.appendChild(el('span', 'no', String(rule.index + 1)));
+      row.appendChild(el('span', 'no', String(
+        (rules.lines && rules.lines[rule.index] != null ? rules.lines[rule.index] : rule.index) + 1)));
       row.appendChild(el('span', 'n', API.num(rule.count)));
       const lbl = el('span', 'lbl', rule.label);
       lbl.title = rule.label;
@@ -1351,41 +1383,136 @@
       await refreshState(res.state);
       say(index == null
         ? `전체 조건 결과 ${API.num(res.rows)}행`
-        : `조건 ${index + 1}번 ${API.num(res.rows)}행`);
+        : `조건 ${API.num((rules.lines && rules.lines[index] != null ? rules.lines[index] : index) + 1)}번 ${API.num(res.rows)}행`);
     } catch (err) { fail(err); }
   }
 
+  /* A sheet row's hits were clicked: find which rule that line became. */
+  function pickSheetRow(line) {
+    const index = (rules.lines || []).indexOf(line);
+    if (index >= 0) pickRule(index);
+  }
+
   async function clearRules() {
-    rules.header = [];
-    rules.rows = [];
-    rules.mapping = [];
-    rules.sig = '';
-    $('#rules-run').disabled = true;
-    renderRuleMap();
+    rules.sheet.reset();
+    rules.lines = [];
+    clearRuleResult();
     try {
       const res = await API.call('rules_clear');
       grid.invalidate();
       await refreshState(res.state);
-      say('멀티 서치를 초기화했습니다.');
+      say('멀티 서치를 비웠습니다.');
     } catch (err) { fail(err); }
   }
+  /* The side panel is a drawer, not furniture: it stays shut until asked for,
+     and the toolbar button says what is in it. Which tab was last open is
+     remembered, so reopening lands where the user left off. */
 
-  function showTab(name) {
-    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-    document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('hidden', p.dataset.panel !== name));
+  function panelOpen() {
+    return !$('#side').classList.contains('hidden');
+  }
+
+  function activeTab() {
+    const tab = document.querySelector('.side-tabs .tab.active');
+    return tab ? tab.dataset.tab : 'facets';
+  }
+
+  function openPanel(name, remember) {
+    const tab = name || activeTab();
+    document.querySelectorAll('.side-tabs .tab[data-tab]').forEach(
+      (t) => t.classList.toggle('active', t.dataset.tab === tab));
+    document.querySelectorAll('.panel').forEach(
+      (p) => p.classList.toggle('hidden', p.dataset.panel !== tab));
     $('#side').classList.remove('hidden');
+    // The condition sheet is a table; give it room the first time it is opened.
+    if (tab === 'rules' && sideWidth() < 560) {
+      setSideWidth(Math.min(840, Math.round(window.innerWidth * 0.45)));
+    }
+    if (remember !== false) rememberPanel(tab, true);
+    if (grid) grid.render();
+  }
+
+  function closePanel() {
+    $('#side').classList.add('hidden');
+    rememberPanel(activeTab(), false);
+    if (grid) { grid.render(); $('#grid').focus(); }
+  }
+
+  /* Clicking the tab you are already on closes the drawer, like a toggle. */
+  function showTab(name) {
+    if (panelOpen() && activeTab() === name) closePanel();
+    else openPanel(name);
+  }
+
+  function rememberPanel(tab, open) {
+    try {
+      localStorage.setItem('csvinsight.panel', JSON.stringify({ tab: tab, open: !!open }));
+    } catch (err) { /* private mode */ }
+  }
+
+  const PANEL_ITEMS = [
+    ['facets', '값 분포'], ['find', '찾기·바꾸기'], ['marks', '북마크'],
+    ['rules', '멀티 서치'], ['cols', '열'],
+  ];
+
+  function panelMenu(event) {
+    const rect = event.target.getBoundingClientRect();
+    const here = panelOpen() ? activeTab() : null;
+    const items = PANEL_ITEMS.map(([tab, label]) => ({
+      label: (here === tab ? '● ' : '○ ') + label,
+      action: () => openPanel(tab),
+    }));
+    if (panelOpen()) {
+      items.push('-');
+      items.push({ label: '패널 닫기', key: `${MOD}+B`, action: closePanel });
+    }
+    menu(rect.left, rect.bottom + 4, items);
+  }
+
+  /* ------------------------------------------------------- side panel size */
+
+  const SIDE_MIN = 280;
+
+  function sideWidth() {
+    const value = parseInt(
+      getComputedStyle(document.documentElement).getPropertyValue('--side-w'), 10);
+    return value || 320;
+  }
+
+  function setSideWidth(px) {
+    const max = Math.max(SIDE_MIN, window.innerWidth - 360);
+    const width = Math.round(Math.max(SIDE_MIN, Math.min(px, max)));
+    document.documentElement.style.setProperty('--side-w', width + 'px');
+    try { localStorage.setItem('csvinsight.side', String(width)); } catch (err) { /* private mode */ }
+    if (grid) grid.render();
+  }
+
+  function dragSide(grip) {
+    grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      grip.classList.add('dragging');
+      grip.setPointerCapture(e.pointerId);
+      const move = (ev) => setSideWidth(window.innerWidth - ev.clientX);
+      const done = () => {
+        grip.classList.remove('dragging');
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', done);
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', done);
+    });
   }
 
   /* ------------------------------------------------------------------ boot */
 
   function applyTheme(theme) {
     document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem('csvopt.theme', theme); } catch (err) { /* private mode */ }
+    try { localStorage.setItem('csvinsight.theme', theme); } catch (err) { /* private mode */ }
   }
 
   async function boot() {
     let theme = 'light';
-    try { theme = localStorage.getItem('csvopt.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (err) { /* ignore */ }
+    try { theme = localStorage.getItem('csvinsight.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (err) { /* ignore */ }
     applyTheme(theme);
 
     grid = new Grid({
@@ -1410,6 +1537,11 @@
       },
     });
 
+    try {
+      const saved = parseInt(localStorage.getItem('csvinsight.side'), 10);
+      if (saved) setSideWidth(saved);
+    } catch (err) { /* private mode */ }
+    dragSide($('#side-grip'));
     $('#grid').addEventListener('keydown', onKey);
     $('#grid').addEventListener('paste', (e) => {
       e.preventDefault();
@@ -1423,7 +1555,14 @@
     $('#btn-saveas').onclick = () => saveAsDialog();
     $('#btn-help').onclick = helpDialog;
     $('#btn-tools').onclick = toolsMenu;
-    $('#btn-find').onclick = () => { showTab('find'); $('#find-needle').focus(); };
+    $('#btn-panel').onclick = panelMenu;
+    $('#side-close').onclick = closePanel;
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !panelOpen()) return;
+      const inField = e.target.matches('input, select, textarea');
+      if (!inField) closePanel();
+      else if (e.target.closest('#side')) { e.target.blur(); closePanel(); }
+    });
     $('#btn-theme').onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
     $('#btn-addfilter').onclick = () => editFilter(-1);
     $('#btn-clearfilter').onclick = () => {
@@ -1450,10 +1589,15 @@
     $('#mark-keep').onclick = () => marksDelete(true);
     $('#mark-prev').onclick = () => gotoMark(false);
     $('#mark-next').onclick = () => gotoMark(true);
-    $('#rules-parse').onclick = parseRules;
+    rules.sheet = new RuleSheet({
+      root: $('#rules-sheet'),
+      onPasteText: loadPastedTable,
+      onPickRow: pickSheetRow,
+      onChange: () => { if (rules.summary) clearRuleResult(); },
+    });
     $('#rules-run').onclick = runRules;
+    $('#rules-auto').onclick = autoMap;
     $('#rules-clear').onclick = clearRules;
-    $('#rules-text').addEventListener('paste', () => setTimeout(parseRules, 0));
     $('#col-add').onclick = () => addColumn(null);
     $('#col-showall').onclick = () => { grid.columns.forEach((c) => { c.hidden = false; }); grid.renderHeader(); renderColumnPanel(); };
     $('#col-pick-all').onclick = (e) => {
@@ -1472,7 +1616,12 @@
       renderColumnPanel();
     };
     $('#job-cancel').onclick = () => { if (state.activeJob) API.cancel(state.activeJob); };
-    document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => showTab(t.dataset.tab); });
+    document.querySelectorAll('.side-tabs .tab[data-tab]').forEach(
+      (t) => { t.onclick = () => showTab(t.dataset.tab); });
+    try {
+      const saved = JSON.parse(localStorage.getItem('csvinsight.panel') || 'null');
+      if (saved && saved.open) openPanel(saved.tab, false);
+    } catch (err) { /* private mode */ }
     window.addEventListener('beforeunload', (e) => {
       if (state.server && state.server.dirty) { e.preventDefault(); e.returnValue = ''; }
     });

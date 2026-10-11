@@ -1,4 +1,4 @@
-"""Local HTTP API + static file server for the csvopt web UI.
+"""Local HTTP API + static file server for the csvinsight web UI.
 
 Only the standard library is used, and the socket is bound to the loopback
 interface with a random per-run token, so the editor behaves like a desktop app
@@ -31,7 +31,7 @@ from .table import SaveError, Table
 def _web_dir() -> str:
     """Where the UI files live: next to this module, or inside the bundle."""
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, "csvopt", "web")
+        return os.path.join(sys._MEIPASS, "csvinsight", "web")
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 
@@ -504,6 +504,29 @@ class Api:
                 "log_kinds": rulelib.column_kinds(table),
             }
 
+    def do_rules_map(self, payload: dict) -> dict:
+        """Re-guess the column mapping for a sheet the user is editing."""
+        header = [str(h) for h in payload.get("header") or []]
+        rows = [[str(c) for c in row] for row in payload.get("rows") or []]
+        if not rows:
+            raise ValueError("조건이 없습니다")
+        kinds = payload.get("kinds")
+        if not kinds:
+            kinds = [
+                rulelib.guess_kind(
+                    [row[i] for row in rows if i < len(row)],
+                    header[i] if i < len(header) else "",
+                )
+                for i in range(max(len(header), max(len(r) for r in rows)))
+            ]
+        with self.session.lock:
+            table = self.session.require()
+            return {
+                "mapping": rulelib.auto_mapping(table, header, rows, list(kinds)),
+                "kinds": kinds,
+                "columns": [c.as_dict() for c in table.columns],
+            }
+
     def do_rules_run(self, payload: dict) -> dict:
         """Match every rule of the pasted table against the log, in one pass."""
         rows = [[str(c) for c in row] for row in payload.get("rows") or []]
@@ -518,7 +541,16 @@ class Api:
         def run(job: Job) -> dict:
             with self.session.lock:
                 table = self.session.require()
-                base = list(table.view) if (scope_view and table.view is not None) else None
+                if scope_view and table.view is not None:
+                    base = list(table.view)   # narrow down inside the current result
+                else:
+                    # A fresh search always scans the file. Leaving the previous
+                    # result in place would quietly search inside it instead --
+                    # and once a search returned nothing, every later one would
+                    # return nothing too.
+                    base = None
+                    table.view = None
+                    table.view_label = ""
                 ruleset = rulelib.build_ruleset(table, rows, mapping, labels)
                 if ruleset.empty:
                     raise ValueError("유효한 조건이 없습니다. 열 연결을 확인해 주세요.")
@@ -810,7 +842,7 @@ def _roots() -> list[str]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "csvopt"
+    server_version = "CSVInsight"
     protocol_version = "HTTP/1.1"
 
     # -------------------------------------------------------------- plumbing
@@ -823,7 +855,7 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         if host and host not in LOCAL_HOSTS:
             return False  # blocks DNS-rebinding from a page in another tab
-        token = self.headers.get("X-Csvopt-Token") or ""
+        token = self.headers.get("X-CsvInsight-Token") or ""
         if not token:
             token = parse_qs(urlparse(self.path).query).get("t", [""])[0]
         return hmac.compare_digest(token, self.server.token)
@@ -912,7 +944,7 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"not JSON serialisable: {type(obj).__name__}")
 
 
-class CsvOptServer(ThreadingHTTPServer):
+class CsvInsightServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
@@ -932,10 +964,14 @@ def serve(
     verbose: bool = False,
     use_cache: bool = True,
     workers: Optional[int] = None,
-) -> CsvOptServer:
+    token: Optional[str] = None,
+) -> CsvInsightServer:
+    """Start the local server. ``token`` fixes the access token; by default a
+    fresh one is minted per run, which is what keeps another program on the
+    machine from talking to this server."""
     session = Session(path, use_cache=use_cache, workers=workers)
-    token = secrets.token_urlsafe(24)
-    server = CsvOptServer((host, port), session, token, verbose=verbose)
+    token = token or secrets.token_urlsafe(24)
+    server = CsvInsightServer((host, port), session, token, verbose=verbose)
     url = f"http://{host}:{server.server_address[1]}/?t={token}"
     server.url = url
     if open_browser:

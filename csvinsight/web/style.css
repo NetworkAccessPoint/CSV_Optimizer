@@ -1,4 +1,4 @@
-/* csvopt UI — light/dark, tuned for long log sessions on Windows and macOS. */
+/* csvinsight UI — light/dark, tuned for long log sessions on Windows and macOS. */
 :root {
   --bg: #f6f7f9;
   --panel: #ffffff;
@@ -156,13 +156,20 @@ body.wrap .cell { white-space: pre-wrap; word-break: break-word; line-height: 1.
 .empty p { color: var(--muted); margin: 0; }
 
 /* ------------------------------------------------------------- side panel */
-.side { width: 320px; flex: 0 0 320px; border-left: 1px solid var(--line);
-        background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.side { width: var(--side-w, 320px); flex: 0 0 var(--side-w, 320px);
+        border-left: 1px solid var(--line); background: var(--panel);
+        display: flex; flex-direction: column; min-height: 0; position: relative; }
+/* Drag the panel wider: the condition sheet wants room, the facet list does not. */
+.side-grip { position: absolute; left: -3px; top: 0; width: 7px; height: 100%;
+             cursor: col-resize; z-index: 5; }
+.side-grip:hover, .side-grip.dragging { background: var(--accent-soft); }
 .side-tabs { display: flex; border-bottom: 1px solid var(--line); }
 .tab { flex: 1; border: 0; background: none; color: var(--muted); font: inherit;
        font-size: 12px; padding: 7px 3px; cursor: pointer; white-space: nowrap;
        border-bottom: 2px solid transparent; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tab.close { flex: 0 0 24px; font-size: 15px; line-height: 1; color: var(--muted); }
+.tab.close:hover { color: var(--danger); }
 .side-body { flex: 1; overflow: auto; padding: 10px; }
 .panel { display: flex; flex-direction: column; gap: 8px; }
 .panel .row { display: flex; gap: 6px; align-items: center; }
@@ -210,6 +217,60 @@ body.wrap .cell { white-space: pre-wrap; word-break: break-word; line-height: 1.
 .rulesout .n { font-variant-numeric: tabular-nums; min-width: 62px; text-align: right; }
 .rulesout .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                  font-family: var(--mono); font-size: 11px; }
+
+/* ------------------------------------------------- condition sheet */
+.sheet { border: 1px solid var(--line); border-radius: 6px; overflow: auto hidden;
+         background: var(--panel); max-height: 46vh; overflow-y: auto; }
+.sheet-head, .sheet .sr { display: grid; min-width: max-content; }
+.sheet-head { position: sticky; top: 0; z-index: 3; background: var(--panel-2);
+              border-bottom: 1px solid var(--line); }
+.sheet .sh { padding: 3px 4px; font-size: 11px; border-right: 1px solid var(--line);
+             display: flex; flex-direction: column; gap: 2px; min-width: 0;
+             position: relative; }
+.sheet .sh .grip { position: absolute; right: -3px; top: 0; width: 7px; height: 100%;
+             cursor: col-resize; z-index: 5; }
+.sheet .sh .grip:hover { background: var(--accent); opacity: .5; }
+.sheet .sh.corner, .sheet .sh.hits { align-items: center; justify-content: center;
+             color: var(--muted); font-weight: 600; background: var(--panel-2); z-index: 4; }
+.sheet .sh.corner { position: sticky; left: 0; }
+.sheet .sh.hits { position: sticky; right: 0; border-left: 1px solid var(--line); }
+.sheet .sh.col.unmapped { background: var(--edit); }
+.sheet .sh .top { display: flex; gap: 2px; align-items: center; }
+.sheet .sh .bottom { display: flex; gap: 2px; align-items: center; }
+.sheet .sh .to { color: var(--muted); font-size: 10px; }
+.sheet .sh input.name { flex: 1; min-width: 0; font-size: 11px; font-weight: 600;
+             padding: 1px 3px; border: 1px solid transparent; background: none;
+             color: var(--text); border-radius: 3px; }
+.sheet .sh input.name:hover { border-color: var(--line); }
+.sheet .sh select { flex: 1; min-width: 0; font-size: 10px; padding: 0 2px; height: 19px; }
+.sheet .sh select.kind { flex: 0 0 62px; }
+.sheet .sh button.x { border: 0; background: none; color: var(--muted); cursor: pointer;
+             font-size: 13px; line-height: 1; padding: 0 2px; }
+.sheet .sh button.x:hover { color: var(--danger); }
+.sheet .sr { border-bottom: 1px solid var(--line); }
+.sheet .sr.picked { background: var(--accent-soft); }
+.sheet .rn { display: flex; align-items: center; justify-content: center; cursor: pointer;
+             font-size: 10px; color: var(--muted); background: var(--panel-2);
+             border-right: 1px solid var(--line);
+             position: sticky; left: 0; z-index: 2; }
+.sheet .rn:hover { color: var(--danger); }
+.sheet .sc { border-right: 1px solid var(--line); }
+.sheet .sc input { width: 100%; border: 0; background: none; color: var(--text);
+             font-family: var(--mono); font-size: 11px; padding: 3px 4px; }
+.sheet .sc input:focus { outline: 2px solid var(--accent); outline-offset: -2px;
+             background: var(--panel); }
+/* Row numbers and hit counts stay put while the conditions scroll sideways:
+   the count is the answer, so it should never be the part that is cut off. */
+.sheet .hit { display: flex; align-items: center; justify-content: flex-end;
+             padding: 0 6px; font-size: 11px; font-variant-numeric: tabular-nums;
+             color: var(--muted); background: var(--panel);
+             position: sticky; right: 0; z-index: 2;
+             border-left: 1px solid var(--line); }
+.sheet .sr.picked .hit { background: var(--accent-soft); }
+.sheet .hit.some { color: var(--accent); cursor: pointer; font-weight: 600; }
+.sheet .hit.some:hover { text-decoration: underline; }
+.sheet .hit.none { color: var(--danger); font-weight: 700; }
+.sheet-foot { display: flex; gap: 6px; padding: 4px; position: sticky; left: 0; }
 
 /* The gutter shows which rule caught the row. */
 .cell.rownum.hasrule::after {
