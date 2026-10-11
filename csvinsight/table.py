@@ -1180,6 +1180,12 @@ class Table:
         newline: Optional[str] = None,
         progress: Optional[Callable[[int, int], bool]] = None,
     ) -> int:
+        if self.file_changed():
+            raise SaveError(
+                "열어 둔 뒤 원본 파일이 바뀌었습니다(로그가 더 쌓였거나 로테이션된 것으로 "
+                "보입니다). 지금 저장하면 바뀐 파일 위에 엉뚱한 내용이 덮어씌워집니다. "
+                "파일을 다시 열어 주세요."
+            )
         delimiter = delimiter or self.dialect.delimiter
         encoding = encoding or self.dialect.encoding
         newline = newline or self.dialect.newline
@@ -1254,6 +1260,21 @@ class Table:
             newline=newline,
             progress=progress,
         )
+
+    def file_changed(self) -> bool:
+        """Whether the file on disk no longer matches the index built from it.
+
+        Logs rotate and logs grow. Every physical read here is a seek to a byte
+        offset recorded when the file was indexed, so once the file underneath
+        changes those offsets point at the wrong bytes -- and a save, which
+        reads every untouched row back from disk, would write that mixture out
+        over whatever is there now.
+        """
+        try:
+            stat = os.stat(self.path)
+        except OSError:
+            return True
+        return stat.st_size != self.index.size or stat.st_mtime_ns != self.index.mtime_ns
 
     def reload(self) -> None:
         """Re-index the file on disk and drop the overlay (used after saving)."""

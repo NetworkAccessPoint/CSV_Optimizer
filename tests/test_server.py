@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 from csvinsight import cli
-from csvinsight.server import serve
+from csvinsight.server import serve, within_root
 
 DATA = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,tail\n"
 
@@ -540,3 +540,142 @@ class TokenOptionTest(unittest.TestCase):
             cli._fixed_token("abc")
         with self.assertRaises(ValueError):
             cli._fixed_token("   ")
+
+class RefusalReasonTest(ServerCase):
+    """A refused request should say which of the two checks it failed."""
+
+    def raw(self, host=None, token=None):
+        headers = {"Content-Type": "application/json"}
+        if host is not None:
+            headers["Host"] = host
+        if token is not None:
+            headers["X-CsvInsight-Token"] = token
+        req = urllib.request.Request(f"{self.base}/api/state", data=b"{}", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as res:
+                return res.status, res.read().decode()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode()
+
+    def test_a_wrong_token_says_so(self):
+        code, body = self.raw(token="nope")
+        self.assertEqual(code, 403)
+        self.assertIn("토큰", body)
+
+    def test_another_host_name_is_a_different_message(self):
+        code, body = self.raw(host="192.168.0.50", token=self.server.token)
+        self.assertEqual(code, 403)
+        self.assertIn("접속할 수 없습니다", body)
+        self.assertNotIn("토큰", body)   # 토큰은 멀쩡했다
+
+
+class ShownUrlTest(unittest.TestCase):
+    def test_a_wildcard_bind_is_advertised_as_loopback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "a.csv")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("a,b\n1,2\n")
+            server = serve(path, host="0.0.0.0", port=0, open_browser=False)
+            try:
+                self.assertIn("http://127.0.0.1:", server.url)
+                self.assertNotIn("0.0.0.0", server.url)
+            finally:
+                server.server_close()
+
+class RootConfinementTest(unittest.TestCase):
+    """`--root` turns a shared token into a key to one folder, not the disk."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        # The server resolves the root (that is what stops a link or a Windows
+        # 8.3 short name from stepping out of it), so the test compares against
+        # the resolved form too: a temp directory is "C:\\Users\\RUNNER~1\\..."
+        # on Windows and "/var/..." for "/private/var/..." on macOS.
+        self.allowed = os.path.realpath(os.path.join(self.dir.name, "logs"))
+        self.outside = os.path.realpath(os.path.join(self.dir.name, "secret"))
+        os.makedirs(self.allowed, exist_ok=True)
+        os.makedirs(self.outside, exist_ok=True)
+        self.inside_file = os.path.join(self.allowed, "a.csv")
+        with open(self.inside_file, "w", encoding="utf-8") as fh:
+            fh.write("a,b\n1,2\n")
+        self.outside_file = os.path.join(self.outside, "secret.csv")
+        with open(self.outside_file, "w", encoding="utf-8") as fh:
+            fh.write("user,pw\nadmin,hunter2\n")
+        self.server = serve(self.inside_file, port=0, open_browser=False,
+                            token="customer-token", root=self.allowed)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+
+    def call(self, name, **payload):
+        req = urllib.request.Request(
+            f"{self.base}/api/{name}", data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "X-CsvInsight-Token": self.server.token})
+        with urllib.request.urlopen(req, timeout=10) as res:
+            return json.loads(res.read())
+
+    def test_browsing_outside_lands_back_at_the_root(self):
+        self.assertEqual(self.call("browse", path=self.outside)["path"], self.allowed)
+        self.assertEqual(self.call("browse", path="/")["path"], self.allowed)
+
+    def test_there_is_no_way_up(self):
+        out = self.call("browse", path=self.allowed)
+        self.assertIsNone(out["parent"])
+        self.assertEqual(out["roots"], [self.allowed])
+
+    def test_opening_a_file_outside_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("open", path=self.outside_file)
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_saving_outside_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("save_as", path=os.path.join(self.outside, "stolen.csv"))
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertFalse(os.path.exists(os.path.join(self.outside, "stolen.csv")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "needs symlinks")
+    def test_a_link_pointing_out_is_neither_listed_nor_followed(self):
+        link = os.path.join(self.allowed, "escape")
+        try:
+            os.symlink(self.outside, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks not permitted here")
+        names = [e["name"] for e in self.call("browse", path=self.allowed)["entries"]]
+        self.assertNotIn("escape", names)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.call("open", path=os.path.join(link, "secret.csv"))
+
+    def test_the_root_is_reported_in_the_state(self):
+        self.assertEqual(self.call("state")["root"], self.allowed)
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "needs symlinks")
+    def test_a_root_given_through_a_link_is_normalised(self):
+        # The root may arrive unresolved -- a symlink, or a Windows short name.
+        # It has to be normalised before anything is compared against it, or a
+        # path that is really inside would look like it is outside.
+        link = os.path.join(self.dir.name, "link-to-logs")
+        try:
+            os.symlink(self.allowed, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks not permitted here")
+        server = serve(self.inside_file, port=0, open_browser=False, root=link)
+        try:
+            self.assertEqual(server.session.root, self.allowed)
+            self.assertTrue(within_root(server.session.root, self.inside_file))
+            self.assertFalse(within_root(server.session.root, self.outside_file))
+        finally:
+            server.server_close()
+
+
+class NoRootTest(ServerCase):
+    def test_without_a_root_nothing_is_confined(self):
+        self.assertIsNone(self.call("state")["root"])
+        out = self.call("browse", path=os.path.dirname(self.path))
+        self.assertIsNotNone(out["parent"])

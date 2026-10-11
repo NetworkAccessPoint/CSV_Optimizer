@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from csvinsight.table import Fenwick, RowSequence, Table
+from csvinsight.table import Fenwick, RowSequence, SaveError, Table
 
 SAMPLE = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,\"multi\nline\"\n4,INFO,tail\n"
 
@@ -193,6 +193,72 @@ class SaveTest(TempFileTest):
             data = fh.read()
         self.assertTrue(data.startswith(b"\xef\xbb\xbf"))
         self.assertIn(b"\r\n", data)
+
+
+
+class StaleFileTest(unittest.TestCase):
+    """A log that rotates or grows under the editor."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.dir.name, "live.csv")
+        self.write("ts,level,msg\n1,INFO,aaa\n2,ERROR,bbb\n3,WARN,ccc\n")
+        self.table = Table(self.path, use_cache=False)
+
+    def tearDown(self):
+        self.table.close()
+        self.dir.cleanup()
+
+    def write(self, text):
+        with open(self.path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        # mtime has a coarse resolution on some filesystems; make the change visible.
+        stat = os.stat(self.path)
+        os.utime(self.path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    def test_an_untouched_file_is_not_reported_as_changed(self):
+        self.assertFalse(self.table.file_changed())
+
+    def test_a_rotated_file_is_noticed(self):
+        self.write("ts,level,msg\n9,INFO,rotated\n")
+        self.assertTrue(self.table.file_changed())
+
+    def test_an_appended_file_is_noticed(self):
+        with open(self.path, "a", encoding="utf-8", newline="") as fh:
+            fh.write("4,INFO,more\n")
+        self.assertTrue(self.table.file_changed())
+
+    def test_a_deleted_file_is_noticed(self):
+        os.unlink(self.path)
+        self.assertTrue(self.table.file_changed())
+
+    def test_saving_over_a_changed_file_is_refused(self):
+        self.table.set_cells([(0, self.table.columns[2].id, "사용자 편집")])
+        self.write("ts,level,msg\n9,INFO,다른 내용\n")
+        with self.assertRaises(SaveError):
+            self.table.save(backup=False)
+        # the file on disk is left exactly as the other writer left it
+        with open(self.path, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "ts,level,msg\n9,INFO,다른 내용\n")
+
+    def test_exporting_from_a_changed_file_is_refused(self):
+        self.write("ts,level,msg\n9,INFO,다른 내용\n")
+        out = os.path.join(self.dir.name, "export.csv")
+        with self.assertRaises(SaveError):
+            self.table.write_to(out)
+        self.assertFalse(os.path.exists(out))
+
+    def test_saving_is_fine_once_the_file_is_reopened(self):
+        self.write("ts,level,msg\n9,INFO,다른 내용\n")
+        table = Table(self.path, use_cache=False)
+        try:
+            self.assertFalse(table.file_changed())
+            table.set_cells([(0, table.columns[2].id, "고침")])
+            table.save(backup=False)
+            with open(self.path, encoding="utf-8") as fh:
+                self.assertIn("고침", fh.read())
+        finally:
+            table.close()
 
 
 if __name__ == "__main__":
