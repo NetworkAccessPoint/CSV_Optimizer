@@ -179,9 +179,15 @@ def _conditions(payload: dict) -> list[ops.Condition]:
 
 
 def _scope_ids(table: Table, payload: dict):
-    """`scope: "view"` narrows an operation to the rows currently listed."""
+    """`scope: "view"` narrows an operation to the rows currently listed.
+
+    The view is handed over as the ``array('q')`` it already is. Copying it
+    into a Python list costs about 36 bytes a row against 8 -- a gigabyte on a
+    30M-row result -- and every caller only iterates it. The session lock is
+    held for the whole job, so the view cannot be rebuilt underneath it.
+    """
     if payload.get("scope") == "view" and table.view is not None:
-        return list(table.view)
+        return table.view
     return None
 
 
@@ -382,7 +388,7 @@ class Api:
                 table = self.session.require()
                 if not conditions:
                     raise ValueError("검색어나 조건이 필요합니다")
-                base = list(table.view) if (scope_view and table.view is not None) else None
+                base = table.view if (scope_view and table.view is not None) else None
                 ids = ops.run_filter(
                     table, conditions, match_all=match_all, base_ids=base,
                     workers=self.session.workers, progress=job.progress,
@@ -450,7 +456,7 @@ class Api:
             with self.session.lock:
                 table = self.session.require()
                 if scope_view and table.view is not None:
-                    base = list(table.view)  # narrow down inside the current result
+                    base = table.view        # narrow down inside the current result
                 else:
                     table.view = None        # a fresh filter always scans the file
                     table.view_label = ""
@@ -542,7 +548,7 @@ class Api:
             with self.session.lock:
                 table = self.session.require()
                 if scope_view and table.view is not None:
-                    base = list(table.view)   # narrow down inside the current result
+                    base = table.view         # narrow down inside the current result
                 else:
                     # A fresh search always scans the file. Leaving the previous
                     # result in place would quietly search inside it instead --
@@ -635,7 +641,7 @@ class Api:
                 table = self.session.require()
                 ids = ops.sort_ids(
                     table, cid, descending=desc,
-                    ids=list(table.view) if table.view is not None else None,
+                    ids=table.view if table.view is not None else None,
                     progress=job.progress,
                 )
                 table.view = ids
