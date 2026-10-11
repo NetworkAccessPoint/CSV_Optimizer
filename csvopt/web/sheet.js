@@ -16,6 +16,25 @@
   ];
   const MIN_ROWS = 8;
   const MIN_COLS = 4;
+  const COL_W = 150;          // fixed: a column only changes width when asked
+  const MIN_W = 56;
+  const MAX_W = 460;
+
+  const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}(?:\/\d{1,2})?\b/;
+  const PORTS = /^\s*\d{1,5}(\s*[,\/]\s*\d{1,5})*\s*$/;
+  const NUMERIC = /^\s*[-+]?\d+(\.\d+)?\s*$/;
+
+  /* The same rule the server applies to a pasted table, so a column typed by
+     hand is compared the same way as one that arrived from Excel. Without it
+     a CIDR lands in a "같음" column and silently matches nothing. */
+  function guessKind(values) {
+    const seen = values.map((v) => String(v == null ? '' : v).trim()).filter(Boolean);
+    if (!seen.length) return null;
+    if (seen.every((v) => IPV4.test(v))) return 'ip';
+    if (seen.every((v) => PORTS.test(v))) return 'ports';
+    if (seen.every((v) => NUMERIC.test(v))) return 'number';
+    return 'equals';
+  }
 
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
@@ -60,6 +79,7 @@
       this.header = [];
       this.rows = [];
       this.mapping = [];
+      this.widths = [];                  // per column, in px -- never auto-changed
       this.counts = null;                // hits per rule row, after a run
       this.picked = null;
       this.focus = { r: 0, c: 0 };
@@ -72,6 +92,7 @@
 
     reset(cols = MIN_COLS, rows = MIN_ROWS) {
       this.header = new Array(cols).fill('');
+      this.widths = new Array(cols).fill(COL_W);
       this.mapping = new Array(cols).fill(null).map(() => ({ column: null, kind: 'equals' }));
       this.rows = [];
       for (let r = 0; r < rows; r++) this.rows.push(new Array(cols).fill(''));
@@ -92,6 +113,7 @@
       this.header = pad(header, width, '');
       this.mapping = pad(mapping, width, null).map(
         (m) => (m ? { column: m.column, kind: m.kind } : { column: null, kind: 'equals' }));
+      this.widths = pad(this.widths, width, COL_W).map((w) => w || COL_W);
       this.rows = rows.map((r) => pad(r, width, ''));
       while (this.rows.length < MIN_ROWS) this.rows.push(new Array(width).fill(''));
       this.counts = null;
@@ -156,6 +178,7 @@
 
     addColumn() {
       this.header.push('');
+      this.widths.push(COL_W);
       this.mapping.push({ column: null, kind: 'equals' });
       this.rows.forEach((row) => row.push(''));
       this.render();
@@ -165,6 +188,7 @@
     deleteColumn(index) {
       if (this.header.length <= 1) return;
       this.header.splice(index, 1);
+      this.widths.splice(index, 1);
       this.mapping.splice(index, 1);
       this.rows.forEach((row) => row.splice(index, 1));
       this.counts = null;
@@ -175,6 +199,7 @@
     grow(rows, cols) {
       while (this.header.length < cols) {
         this.header.push('');
+        this.widths.push(COL_W);
         this.mapping.push({ column: null, kind: 'equals' });
         this.rows.forEach((row) => row.push(''));
       }
@@ -219,7 +244,10 @@
 
     render() {
       const width = this.header.length;
-      const template = `30px repeat(${width}, minmax(104px, 1fr)) 70px`;
+      // One explicit pixel track per column, shared by the header row and
+      // every body row: an intrinsic width (1fr, max-content) is measured per
+      // grid, so the header and the cells under it would drift apart.
+      const template = `30px ${this.widths.slice(0, width).map((w) => w + 'px').join(' ')} 70px`;
       this.root.innerHTML = '';
 
       const head = el('div', 'sheet-head');
@@ -275,7 +303,12 @@
       map.title = '이 조건을 어느 로그 열과 비교할지';
       map.onchange = () => {
         spec.column = map.value === '' ? null : +map.value;
-        if (spec.column != null && spec.kind === 'ignore') spec.kind = 'equals';
+        if (spec.column != null && !spec.kindSet) {
+          // Connecting a column is the moment its values say how to compare.
+          spec.kind = guessKind(this.rows.map((row) => row[c])) || 'equals';
+        } else if (spec.column != null && spec.kind === 'ignore') {
+          spec.kind = 'equals';
+        }
         this.counts = null;
         this.render();
         this.onChange();
@@ -287,10 +320,29 @@
       kind.title = '비교 방식';
       kind.onchange = () => {
         spec.kind = kind.value;
+        spec.kindSet = true;      // the user decided; stop guessing for this column
         this.counts = null;
         this.render();
         this.onChange();
       };
+
+      const grip = el('div', 'grip');
+      grip.title = '끌어서 열 너비 조절 · 더블클릭하면 내용에 맞춤';
+      grip.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startW = this.widths[c];
+        grip.setPointerCapture(e.pointerId);
+        const move = (ev) => this.setWidth(c, startW + (ev.clientX - startX));
+        const done = () => {
+          grip.removeEventListener('pointermove', move);
+          grip.removeEventListener('pointerup', done);
+        };
+        grip.addEventListener('pointermove', move);
+        grip.addEventListener('pointerup', done);
+      });
+      grip.addEventListener('dblclick', (e) => { e.preventDefault(); this.fitColumn(c); });
 
       const drop = el('button', 'x', '×');
       drop.title = '이 열 지우기';
@@ -305,7 +357,25 @@
       bottom.appendChild(kind);
       cell.appendChild(top);
       cell.appendChild(bottom);
+      cell.appendChild(grip);
       return cell;
+    }
+
+    setWidth(c, px) {
+      this.widths[c] = Math.round(Math.max(MIN_W, Math.min(px, MAX_W)));
+      const track = `30px ${this.widths.map((w) => w + 'px').join(' ')} 70px`;
+      this.root.querySelectorAll('.sheet-head, .sr').forEach((node) => {
+        node.style.gridTemplateColumns = track;
+      });
+    }
+
+    /* Widest thing in the column, header included -- only ever on request. */
+    fitColumn(c) {
+      let longest = String(this.header[c] || '').length;
+      this.rows.forEach((row) => {
+        longest = Math.max(longest, String(row[c] == null ? '' : row[c]).length);
+      });
+      this.setWidth(c, longest * 7.3 + 26);
     }
 
     cell(value, r, c) {
@@ -319,7 +389,14 @@
         this.rows[r][c] = input.value;
         if (this.counts) { this.counts = null; this.repaintHits(); }
       };
-      input.onchange = () => this.onChange();
+      input.onchange = () => {
+        const spec = this.mapping[c];
+        if (spec && spec.column != null && !spec.kindSet) {
+          const guess = guessKind(this.rows.map((row) => row[c]));
+          if (guess && guess !== spec.kind) { spec.kind = guess; this.render(); }
+        }
+        this.onChange();
+      };
       input.onfocus = () => { this.focus = { r: r, c: c }; };
       input.onkeydown = (e) => this.onKey(e, r, c, input);
       box.appendChild(input);

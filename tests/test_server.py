@@ -358,6 +358,42 @@ class RuleApiTest(ServerCase):
         self.assertEqual([r["count"] for r in state["rules"]["rules"]], [1, 1, 1, 0])
         self.call("rules_clear")
 
+    def test_a_second_search_scans_the_file_again(self):
+        # The first result used to stay as the view, so every later search
+        # silently ran inside it -- and once one returned nothing, so did all.
+        first = self.run_rules()
+        self.assertEqual(first["result"]["scanned"], 5)
+        again = self.run_rules()
+        self.assertEqual(again["result"]["scanned"], 5)
+        self.assertEqual(again["result"]["matched"], first["result"]["matched"])
+        self.call("rules_clear")
+
+    def test_a_search_after_an_empty_result_still_scans(self):
+        spec = self.parsed()
+        nothing = [["203.0.113.9", "198.51.100.9", "UDP", "9999", "없음"]]
+        empty = self.run_job("rules_run", rows=nothing, mapping=spec["mapping"],
+                             header=spec["header"])
+        self.assertEqual(empty["result"]["matched"], 0)
+        after = self.run_rules()
+        self.assertEqual(after["result"]["scanned"], 5)
+        self.assertEqual(after["result"]["matched"], 3)
+        self.call("rules_clear")
+
+    def test_remap_is_not_fooled_by_an_active_filter(self):
+        # Guessing what a column holds has to look at the file: a filter that
+        # matched nothing would otherwise make every column look empty.
+        self.run_job("filter", conditions=[], quick="no-such-value", scope="all")
+        self.assertEqual(self.call("state")["view_rows"], 0)
+        res = self.call(
+            "rules_map",
+            header=["Source", "Destination"],
+            rows=[["70.222.12.0/26", "105.181.150.6"]],
+        )
+        names = {c["id"]: c["name"] for c in res["columns"]}
+        self.assertEqual([names.get(m["column"]) for m in res["mapping"]],
+                         ["src_ip", "dst_ip"])
+        self.call("clear_view")
+
     def test_rule_labels_name_the_purpose_column(self):
         job = self.run_rules()
         self.assertTrue(job["result"]["rules"][0]["label"].startswith("SNMP"))

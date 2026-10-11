@@ -465,8 +465,13 @@ def _compatible(rule_kind: str, log_kind: str) -> bool:
 
 
 def sample_columns(table: Table, sample: int = 200) -> list[list[str]]:
-    """The first few values of every log column, for guessing what it holds."""
-    _ids, rows = table.read_range(0, sample)
+    """The first few values of every log column, for guessing what it holds.
+
+    Sampled off the file rather than the current view: a filter would skew
+    what each column looks like, and an empty result would make every column
+    look like it holds nothing at all.
+    """
+    rows = table.sample_rows(sample)
     return [
         [row[i] for row in rows if i < len(row)]
         for i in range(len(table.columns))
@@ -610,7 +615,7 @@ def repair_mapping(
     arrangement catches anything the original guess stands: the rules may
     simply be unused, which is an answer in itself.
     """
-    _ids, data = table.read_range(0, sample)
+    data = table.sample_rows(sample)
     if not data or _sample_hits(table, rows, mapping, data):
         return mapping
     current = mapping

@@ -17,6 +17,7 @@ import sys
 from array import array
 from bisect import bisect_right
 from dataclasses import dataclass, field
+from itertools import islice
 from typing import Callable, Iterable, Iterator, Optional
 
 from .bitset import POPCOUNT, Bitset
@@ -609,6 +610,17 @@ class Table:
     def all_ids(self) -> Iterator[int]:
         """Every row id in display order, ignoring any active filter."""
         return self.seq.iter_ids()
+
+    def sample_rows(self, count: int) -> list[list[str]]:
+        """The first rows of the file, ignoring any active filter.
+
+        Guessing what a column holds has to look at the file itself: a filter
+        narrows the view to the rows that already matched something, and an
+        empty result would otherwise leave every column looking blank.
+        """
+        ids = list(islice(self.all_ids(), max(0, count)))
+        raws = self.read_physical_many([r for r in ids if r >= 0])
+        return [self.project(rid, raws.get(rid)) for rid in ids]
 
     def read_row(self, rid: int) -> list[str]:
         raw = self.read_physical(rid) if rid >= 0 else None

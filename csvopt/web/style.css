@@ -223,7 +223,11 @@ body.wrap .cell { white-space: pre-wrap; word-break: break-word; line-height: 1.
 .sheet-head { position: sticky; top: 0; z-index: 3; background: var(--panel-2);
               border-bottom: 1px solid var(--line); }
 .sheet .sh { padding: 3px 4px; font-size: 11px; border-right: 1px solid var(--line);
-             display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+             display: flex; flex-direction: column; gap: 2px; min-width: 0;
+             position: relative; }
+.sheet .sh .grip { position: absolute; right: -3px; top: 0; width: 7px; height: 100%;
+             cursor: col-resize; z-index: 5; }
+.sheet .sh .grip:hover { background: var(--accent); opacity: .5; }
 .sheet .sh.corner, .sheet .sh.hits { align-items: center; justify-content: center;
              color: var(--muted); font-weight: 600; background: var(--panel-2); z-index: 4; }
 .sheet .sh.corner { position: sticky; left: 0; }

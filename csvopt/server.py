@@ -541,7 +541,16 @@ class Api:
         def run(job: Job) -> dict:
             with self.session.lock:
                 table = self.session.require()
-                base = list(table.view) if (scope_view and table.view is not None) else None
+                if scope_view and table.view is not None:
+                    base = list(table.view)   # narrow down inside the current result
+                else:
+                    # A fresh search always scans the file. Leaving the previous
+                    # result in place would quietly search inside it instead --
+                    # and once a search returned nothing, every later one would
+                    # return nothing too.
+                    base = None
+                    table.view = None
+                    table.view_label = ""
                 ruleset = rulelib.build_ruleset(table, rows, mapping, labels)
                 if ruleset.empty:
                     raise ValueError("유효한 조건이 없습니다. 열 연결을 확인해 주세요.")
