@@ -581,3 +581,79 @@ class ShownUrlTest(unittest.TestCase):
                 self.assertNotIn("0.0.0.0", server.url)
             finally:
                 server.server_close()
+
+class RootConfinementTest(unittest.TestCase):
+    """`--root` turns a shared token into a key to one folder, not the disk."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.allowed = os.path.join(self.dir.name, "logs")
+        self.outside = os.path.join(self.dir.name, "secret")
+        os.makedirs(self.allowed)
+        os.makedirs(self.outside)
+        self.inside_file = os.path.join(self.allowed, "a.csv")
+        with open(self.inside_file, "w", encoding="utf-8") as fh:
+            fh.write("a,b\n1,2\n")
+        self.outside_file = os.path.join(self.outside, "secret.csv")
+        with open(self.outside_file, "w", encoding="utf-8") as fh:
+            fh.write("user,pw\nadmin,hunter2\n")
+        self.server = serve(self.inside_file, port=0, open_browser=False,
+                            token="customer-token", root=self.allowed)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.dir.cleanup()
+
+    def call(self, name, **payload):
+        req = urllib.request.Request(
+            f"{self.base}/api/{name}", data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "X-CsvInsight-Token": self.server.token})
+        with urllib.request.urlopen(req, timeout=10) as res:
+            return json.loads(res.read())
+
+    def test_browsing_outside_lands_back_at_the_root(self):
+        self.assertEqual(self.call("browse", path=self.outside)["path"], self.allowed)
+        self.assertEqual(self.call("browse", path="/")["path"], self.allowed)
+
+    def test_there_is_no_way_up(self):
+        out = self.call("browse", path=self.allowed)
+        self.assertIsNone(out["parent"])
+        self.assertEqual(out["roots"], [self.allowed])
+
+    def test_opening_a_file_outside_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("open", path=self.outside_file)
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_saving_outside_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("save_as", path=os.path.join(self.outside, "stolen.csv"))
+        self.assertEqual(ctx.exception.code, 400)
+        self.assertFalse(os.path.exists(os.path.join(self.outside, "stolen.csv")))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "needs symlinks")
+    def test_a_link_pointing_out_is_neither_listed_nor_followed(self):
+        link = os.path.join(self.allowed, "escape")
+        try:
+            os.symlink(self.outside, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks not permitted here")
+        names = [e["name"] for e in self.call("browse", path=self.allowed)["entries"]]
+        self.assertNotIn("escape", names)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.call("open", path=os.path.join(link, "secret.csv"))
+
+    def test_the_root_is_reported_in_the_state(self):
+        self.assertEqual(self.call("state")["root"], self.allowed)
+
+
+class NoRootTest(ServerCase):
+    def test_without_a_root_nothing_is_confined(self):
+        self.assertIsNone(self.call("state")["root"])
+        out = self.call("browse", path=os.path.dirname(self.path))
+        self.assertIsNotNone(out["parent"])

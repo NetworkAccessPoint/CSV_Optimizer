@@ -58,6 +58,21 @@ CSVINSIGHT_TOKEN=정해둔값 csvinsight app.csv          # macOS/Linux
 권합니다.** 고정 토큰을 쓰면 실행할 때 그 사실을 알려줍니다 — 주소를 아는 사람은 그 PC에서
 열려 있는 파일을 보고 고칠 수 있으니, 아무에게나 알려줄 주소는 아닙니다.
 
+### 열람 범위 묶기
+
+기본은 그 PC의 어떤 폴더든 열 수 있습니다. 혼자 쓰는 도구라면 그게 편하지만, **토큰을
+남에게 건네는 경우(고객사 제공 등) 그 토큰은 곧 그 PC의 파일 탐색 권한**이 됩니다.
+`--root` 로 한 폴더 안에 묶으세요.
+
+```bash
+csvinsight D:\logs\traffic.csv --root D:\logs
+set CSVINSIGHT_ROOT=D:\logs && csvinsight D:\logs\traffic.csv
+```
+
+묶으면 그 폴더 밖은 **목록에도 안 나오고, 열 수도 저장할 수도 없습니다.** 상위 폴더로
+올라가는 길이 없고, 폴더 안에 바깥을 가리키는 바로가기(심볼릭 링크)가 있어도 따라가지
+않습니다. 시작할 때 제한된 폴더를 화면에 알려줍니다.
+
 `--host` 로 다른 주소에 바인드해도 **접속은 `127.0.0.1` / `localhost` 로만 받습니다.**
 다른 PC에서 붙는 용도가 아니라, 브라우저의 다른 탭에 떠 있는 웹페이지가 이 서버를
 두드리는 것(DNS rebinding)을 막기 위한 검사입니다. 그래서 LAN IP나 도메인으로 접속하면
@@ -295,7 +310,7 @@ python3 -m csvinsight convert app.csv -o excel.csv --encoding utf-8-sig --newlin
 ## 개발
 
 ```bash
-python3 tools/run_tests.py                      # 190개 테스트 (타임아웃 포함)
+python3 tools/run_tests.py                      # 207개 테스트 (타임아웃 포함)
 python3 tools/run_pool_tests.py                 # 워커 프로세스 테스트
 python3 tools/make_sample_log.py sample.csv --rows 2000000   # 시험용 로그 생성
 python3 tools/make_sample_firewall_log.py fw.csv --rows 300000  # 멀티 서치 시험용

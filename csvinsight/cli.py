@@ -65,6 +65,7 @@ def _finish(label: str) -> None:
 
 
 TOKEN_ENV = "CSVINSIGHT_TOKEN"
+ROOT_ENV = "CSVINSIGHT_ROOT"
 MIN_TOKEN = 8
 
 
@@ -90,6 +91,19 @@ def _fixed_token(given: Optional[str]) -> Optional[str]:
     return token
 
 
+def _resolved_root(root: Optional[str]) -> Optional[str]:
+    """Check the confined directory here, so a typo is a message not a traceback."""
+    from .server import resolve_root
+
+    return resolve_root(root)
+
+
+def _inside(root: str, path: str) -> bool:
+    from .server import within_root
+
+    return within_root(root, path)
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .server import serve
 
@@ -97,10 +111,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if path and not os.path.isfile(path):
         print(f"파일을 찾을 수 없습니다: {path}", file=sys.stderr)
         return 2
+    root = args.root if args.root is not None else os.environ.get(ROOT_ENV)
     try:
         token = _fixed_token(args.token)
+        root = _resolved_root(root)
     except ValueError as exc:
         print(exc, file=sys.stderr)
+        return 2
+    if root and path and not _inside(root, path):
+        print(f"여는 파일이 지정한 폴더 밖에 있습니다.\n  파일: {path}\n  폴더: {root}",
+              file=sys.stderr)
         return 2
     server = serve(
         path=path,
@@ -111,10 +131,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
         use_cache=not args.no_cache,
         workers=args.workers,
         token=token,
+        root=root,
     )
     # flush: a frozen build's stdout is block buffered when it is not a tty
     print(f"CSV Insight {__version__} — {server.url}", flush=True)
     print("브라우저가 열리지 않으면 위 주소를 직접 붙여넣으세요. 종료하려면 Ctrl+C.", flush=True)
+    if server.session.root:
+        print(f"파일 접근이 다음 폴더 안으로 제한됩니다: {server.session.root}", flush=True)
     if token:
         print("고정 토큰을 쓰고 있습니다. 이 주소를 아는 사람은 이 PC에서 "
               "열려 있는 파일을 보고 고칠 수 있습니다.", flush=True)
@@ -220,6 +243,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_open.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
     p_open.add_argument("-v", "--verbose", action="store_true", help="요청 로그 출력")
+    p_open.add_argument(
+        "--root",
+        help="이 폴더 밖의 파일은 열지도 저장하지도 못하게 합니다. "
+             "토큰을 남에게 건네는 경우(고객사 제공 등) 그 토큰이 PC 전체의 "
+             f"파일 탐색 권한이 되지 않도록 묶어 둡니다. 환경변수 {ROOT_ENV} 로도 지정 가능.",
+    )
     p_open.add_argument(
         "--token",
         help="접속 토큰을 고정합니다 (기본: 실행할 때마다 새로 생성). "

@@ -48,11 +48,16 @@ class Session:
         path: Optional[str] = None,
         use_cache: bool = True,
         workers: Optional[int] = None,
+        root: Optional[str] = None,
     ):
         self.lock = threading.RLock()
         self.jobs = JobManager()
         self.table: Optional[Table] = None
         self.error: str = ""
+        # When set, the file browser and every open/save stays inside it. A
+        # token handed to someone else is then a key to these files, not to
+        # the whole machine.
+        self.root = resolve_root(root)
         self.use_cache = use_cache
         self.workers = workers  # None = decide from the machine, 1 = single process
         self._stamp = 0
@@ -107,7 +112,7 @@ class Session:
         table = self.table
         if table is None:
             return {"open": False, "stamp": stamp, "os": os.name, "sep": os.sep,
-                    "error": self.error}
+                    "error": self.error, "root": self.root}
         return {
             "open": True,
             "stamp": stamp,
@@ -133,6 +138,7 @@ class Session:
             "deleted_rows": table.seq.deleted_count,
             # Logs rotate under the editor; the UI warns before a save can go wrong.
             "file_changed": table.file_changed(),
+            "root": self.root,
             "rules": self.rule_summary(),
         }
 
@@ -217,6 +223,7 @@ class Api:
             raise ValueError("path is required")
         if not os.path.isfile(path):
             raise ValueError(f"not a file: {path}")
+        self._require_in_root(path)
         job = self.session.jobs.start(
             "open",
             lambda job: self._open_job(job, path),
@@ -749,6 +756,7 @@ class Api:
         path = os.path.expanduser(str(payload.get("path", "")).strip().strip('"'))
         if not path:
             raise ValueError("path is required")
+        self._require_in_root(path)
         scope = payload.get("scope") or ("view" if payload.get("view_only") else "all")
         encoding = payload.get("encoding") or None
         delimiter = payload.get("delimiter") or None
@@ -790,12 +798,23 @@ class Api:
 
     # ------------------------------------------------------------ file browse
 
+    def _require_in_root(self, path: str) -> None:
+        """Refuse a path outside the confined directory, when one is set."""
+        root = self.session.root
+        if root and not within_root(root, path):
+            raise ValueError(
+                f"이 폴더 밖의 파일은 열거나 저장할 수 없습니다. 허용된 폴더: {root}"
+            )
+
     def do_browse(self, payload: dict) -> dict:
         """Directory listing, so the UI can pick files by real path."""
-        path = os.path.expanduser(str(payload.get("path", "")) or os.getcwd())
+        root = self.session.root
+        path = os.path.expanduser(str(payload.get("path", "")) or root or os.getcwd())
         if os.path.isfile(path):
             path = os.path.dirname(path)
         path = os.path.abspath(path)
+        if root and not within_root(root, path):
+            path = root          # a request from outside lands back at the top
         entries = []
         try:
             with os.scandir(path) as it:
@@ -807,6 +826,8 @@ class Api:
                         size = 0 if is_dir else entry.stat().st_size
                     except OSError:
                         continue
+                    if root and not within_root(root, entry.path):
+                        continue     # a link pointing out of the directory
                     if not is_dir and os.path.splitext(entry.name)[1].lower() not in (
                         ".csv", ".tsv", ".txt", ".log", ".psv", ".dat",
                     ):
@@ -816,11 +837,15 @@ class Api:
         except OSError as exc:
             raise ValueError(str(exc))
         entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
+        parent = os.path.dirname(path) if os.path.dirname(path) != path else None
+        if root and (parent is None or not within_root(root, parent)):
+            parent = None        # no stepping above the confined directory
         return {
             "path": path,
-            "parent": os.path.dirname(path) if os.path.dirname(path) != path else None,
+            "parent": parent,
             "entries": entries,
-            "roots": _roots(),
+            "roots": [root] if root else _roots(),
+            "root": root,
         }
 
 
@@ -829,6 +854,32 @@ def _index_of(view: array, rid: int) -> int:
         return view.index(rid)
     except ValueError:
         return -1
+
+
+def resolve_root(root: Optional[str]) -> Optional[str]:
+    """The directory the session is confined to, or None for the whole disk."""
+    if not root:
+        return None
+    resolved = os.path.realpath(os.path.expanduser(str(root).strip()))
+    if not os.path.isdir(resolved):
+        raise ValueError(f"폴더가 아닙니다: {resolved}")
+    return resolved
+
+
+def within_root(root: Optional[str], path: str) -> bool:
+    """Whether a path stays inside the confined directory.
+
+    Compared after resolving symlinks, so a link planted inside the directory
+    cannot be used to step out of it. Without a root everything is allowed,
+    which is the default for someone running this on their own machine.
+    """
+    if not root:
+        return True
+    try:
+        target = os.path.realpath(os.path.expanduser(path))
+        return os.path.commonpath([root, target]) == root
+    except (OSError, ValueError):
+        return False   # different drive on Windows, or an unusable path
 
 
 def _roots() -> list[str]:
@@ -994,11 +1045,12 @@ def serve(
     use_cache: bool = True,
     workers: Optional[int] = None,
     token: Optional[str] = None,
+    root: Optional[str] = None,
 ) -> CsvInsightServer:
     """Start the local server. ``token`` fixes the access token; by default a
     fresh one is minted per run, which is what keeps another program on the
     machine from talking to this server."""
-    session = Session(path, use_cache=use_cache, workers=workers)
+    session = Session(path, use_cache=use_cache, workers=workers, root=root)
     token = token or secrets.token_urlsafe(24)
     server = CsvInsightServer((host, port), session, token, verbose=verbose)
     # "0.0.0.0" means "listen on every interface"; it is not an address anyone
