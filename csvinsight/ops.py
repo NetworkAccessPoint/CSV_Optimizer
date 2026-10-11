@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
 
+from .index import bytes_encoding
 from .table import Table
 
 Progress = Optional[Callable[[int, int], bool]]
@@ -48,6 +49,12 @@ def parse_number(value: str) -> Optional[float]:
         # Trailing units are common in logs: "12ms", "3.4MB".
         match = re.match(r"^[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
         if match:
+            # ... but a dot right after the number means the number was never
+            # whole: "168.126.63.1" and "2026.10.11" are an address and a date,
+            # and reading them as 168.126 / 2026.10 turns a facet panel into
+            # nonsense (min/max/average over IP addresses).
+            if text[match.end():match.end() + 1] == ".":
+                return None
             try:
                 return float(match.group(0))
             except ValueError:
@@ -267,7 +274,9 @@ def _prefilter_literals(table: Table, compiled: list["CompiledCondition"]) -> li
     skipped: with AND semantics, any subset of the required literals is still
     a sound pre-filter.
     """
-    encoding = table.dialect.encoding
+    encoding = bytes_encoding(table.dialect.encoding)
+    if encoding is None:  # UTF-16/32: an ASCII literal is not an ASCII byte run
+        return []
     specials = {table.dialect.delimiter, table.dialect.quotechar, "\n", "\r"}
     literals: list[tuple[bytes, bool]] = []
     for c in compiled:

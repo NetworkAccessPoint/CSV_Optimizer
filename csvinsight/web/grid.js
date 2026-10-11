@@ -561,8 +561,12 @@
 
     cancelEdit() {
       if (!this.editing) return;
-      this.editing.input.remove();
+      // Clear the state *before* detaching: removing a focused input fires
+      // blur synchronously, and the blur handler would otherwise re-enter
+      // through commitEdit() and remove the same node again.
+      const ed = this.editing;
       this.editing = null;
+      ed.input.remove();
     }
 
     setMark(id, on) {
