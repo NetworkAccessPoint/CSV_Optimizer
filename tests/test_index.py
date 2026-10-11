@@ -113,6 +113,24 @@ class SniffTest(unittest.TestCase):
     def test_headerless(self):
         self.check(b"1,2,3\n4,5,6\n7,8,9\n", has_header=False)
 
+    def test_unnamed_columns_do_not_hide_the_header(self):
+        # A Palo Alto traffic export names 113 of its 115 columns and leaves
+        # two blank; the row is still a header.
+        head = ",".join(["Receive Time", "Source address", "", "Destination Port", ""])
+        body = ",".join(["2026/10/11 21:57", "172.100.101.25", "", "53", ""])
+        self.check(f"{head}\n{body}\n{body}\n".encode("utf-8"), has_header=True)
+
+    def test_a_mostly_blank_first_row_is_not_a_header(self):
+        self.check(b"a,,,,\n1,2,3,4,5\n6,7,8,9,10\n", has_header=False)
+
+    def test_a_few_repeated_names_are_tolerated(self):
+        head = "ts,src,dst,port,port,note"
+        body = "2026-01-01,10.0.0.1,10.0.0.2,53,53,dns"
+        self.check(f"{head}\n{body}\n{body}\n".encode("utf-8"), has_header=True)
+
+    def test_a_row_that_is_mostly_repetition_is_not_a_header(self):
+        self.check(b"x,x,x,x,y,z\na,b,c,d,e,f\ng,h,i,j,k,l\n", has_header=False)
+
     def test_cp949(self):
         self.check("이름,나이\n홍길동,30\n".encode("cp949"), encoding="cp949")
 

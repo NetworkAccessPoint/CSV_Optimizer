@@ -124,9 +124,16 @@ def _sniff_header(text: str, delimiter: str) -> bool:
     if len(rows) < 2:
         return bool(rows)
     head, body = rows[0], rows[1:]
-    if any(not c.strip() for c in head):
+    named = [c.strip() for c in head if c.strip()]
+    if not named:
         return False
-    if len(set(head)) != len(head):
+    # A vendor export can leave a few columns unnamed -- a Palo Alto traffic
+    # log has two among its 115 -- so blanks are tolerated as long as names
+    # still carry the row. A repeat or two is fine for the same reason, but a
+    # row where half the names are repeats reads as data, not labels.
+    if len(named) * 2 < len(head):
+        return False
+    if len(set(named)) * 2 <= len(named):
         return False
 
     def numeric_ratio(row: Iterable[str]) -> float:
