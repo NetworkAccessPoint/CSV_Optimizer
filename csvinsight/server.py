@@ -859,14 +859,28 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self.server, "verbose", False):
             super().log_message(fmt, *args)
 
-    def _authorised(self) -> bool:
+    def _refusal(self) -> Optional[str]:
+        """Why this request is refused, or None when it may proceed.
+
+        The two reasons are told apart on purpose: a wrong token and a request
+        that arrived under some other name are very different problems, and
+        reporting the first for the second sends people hunting for a token
+        that was never wrong.
+        """
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
-        if host and host not in LOCAL_HOSTS:
-            return False  # blocks DNS-rebinding from a page in another tab
+        if host and host not in self.server.allowed_hosts:
+            # blocks DNS-rebinding from a page sitting in another tab
+            return (f"이 주소({host})로는 접속할 수 없습니다. "
+                    "이 서버는 127.0.0.1 로만 열려 있습니다.")
         token = self.headers.get("X-CsvInsight-Token") or ""
         if not token:
             token = parse_qs(urlparse(self.path).query).get("t", [""])[0]
-        return hmac.compare_digest(token, self.server.token)
+        if not hmac.compare_digest(token, self.server.token):
+            return "접속 토큰이 없거나 올바르지 않습니다."
+        return None
+
+    def _authorised(self) -> bool:
+        return self._refusal() is None
 
     def _send(self, code: int, body: bytes, ctype: str, extra: Optional[dict] = None) -> None:
         self.send_response(code)
@@ -890,8 +904,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         route = unquote(parsed.path)
         if route in ("/", "/index.html"):
-            if not self._authorised():
-                self._send(403, b"invalid or missing token", "text/plain; charset=utf-8")
+            refusal = self._refusal()
+            if refusal:
+                self._send(403, refusal.encode("utf-8"), "text/plain; charset=utf-8")
                 return
             self._serve_static("index.html")
             return
@@ -909,8 +924,9 @@ class Handler(BaseHTTPRequestHandler):
         if not route.startswith("/api/"):
             self._send(404, b"not found", "text/plain; charset=utf-8")
             return
-        if not self._authorised():
-            self._json(403, {"error": "invalid or missing token"})
+        refusal = self._refusal()
+        if refusal:
+            self._json(403, {"error": refusal})
             return
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY:
@@ -956,12 +972,17 @@ class CsvInsightServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, session: Session, token: str, verbose: bool = False):
+    def __init__(self, addr, session: Session, token: str, verbose: bool = False,
+                 allowed_hosts: Optional[set] = None):
         super().__init__(addr, Handler)
         self.session = session
         self.api = Api(session)
         self.token = token
         self.verbose = verbose
+        # Which Host headers this server answers to. Loopback only by default:
+        # anything else is a request that reached us under another name, which
+        # is how a page in another tab would try to talk to this server.
+        self.allowed_hosts = set(allowed_hosts or LOCAL_HOSTS)
 
 
 def serve(
@@ -980,7 +1001,10 @@ def serve(
     session = Session(path, use_cache=use_cache, workers=workers)
     token = token or secrets.token_urlsafe(24)
     server = CsvInsightServer((host, port), session, token, verbose=verbose)
-    url = f"http://{host}:{server.server_address[1]}/?t={token}"
+    # "0.0.0.0" means "listen on every interface"; it is not an address anyone
+    # can open. The address to hand out is still the loopback one.
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+    url = f"http://{shown}:{server.server_address[1]}/?t={token}"
     server.url = url
     if open_browser:
         threading.Timer(0.3, lambda: webbrowser.open(url)).start()

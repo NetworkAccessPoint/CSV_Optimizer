@@ -213,7 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_open = sub.add_parser("open", help="편집기를 브라우저에서 열기 (기본 동작)")
     p_open.add_argument("path", nargs="?", help="열 CSV/로그 파일")
     p_open.add_argument("--port", type=int, default=0, help="포트 (기본: 임의)")
-    p_open.add_argument("--host", default="127.0.0.1", help="바인드 주소 (기본: 127.0.0.1)")
+    p_open.add_argument(
+        "--host", default="127.0.0.1",
+        help="바인드 주소 (기본: 127.0.0.1). 다른 주소로 열어도 접속은 "
+             "127.0.0.1/localhost 로만 받습니다 — 다른 PC 에서 붙는 용도가 아닙니다.",
+    )
     p_open.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
     p_open.add_argument("-v", "--verbose", action="store_true", help="요청 로그 출력")
     p_open.add_argument(

@@ -540,3 +540,44 @@ class TokenOptionTest(unittest.TestCase):
             cli._fixed_token("abc")
         with self.assertRaises(ValueError):
             cli._fixed_token("   ")
+
+class RefusalReasonTest(ServerCase):
+    """A refused request should say which of the two checks it failed."""
+
+    def raw(self, host=None, token=None):
+        headers = {"Content-Type": "application/json"}
+        if host is not None:
+            headers["Host"] = host
+        if token is not None:
+            headers["X-CsvInsight-Token"] = token
+        req = urllib.request.Request(f"{self.base}/api/state", data=b"{}", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as res:
+                return res.status, res.read().decode()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode()
+
+    def test_a_wrong_token_says_so(self):
+        code, body = self.raw(token="nope")
+        self.assertEqual(code, 403)
+        self.assertIn("토큰", body)
+
+    def test_another_host_name_is_a_different_message(self):
+        code, body = self.raw(host="192.168.0.50", token=self.server.token)
+        self.assertEqual(code, 403)
+        self.assertIn("접속할 수 없습니다", body)
+        self.assertNotIn("토큰", body)   # 토큰은 멀쩡했다
+
+
+class ShownUrlTest(unittest.TestCase):
+    def test_a_wildcard_bind_is_advertised_as_loopback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "a.csv")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("a,b\n1,2\n")
+            server = serve(path, host="0.0.0.0", port=0, open_browser=False)
+            try:
+                self.assertIn("http://127.0.0.1:", server.url)
+                self.assertNotIn("0.0.0.0", server.url)
+            finally:
+                server.server_close()
