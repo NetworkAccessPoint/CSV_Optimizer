@@ -40,7 +40,23 @@ pip install -e .                  # 선택: csvinsight 명령으로 설치
 ```
 
 주소에는 1회용 토큰이 붙습니다(`http://127.0.0.1:<포트>/?t=...`). 127.0.0.1에만 바인딩하고 토큰이
-없는 요청은 거부하므로, 같은 네트워크의 다른 사람이 열 수 없습니다.
+없는 요청은 거부하므로, 같은 네트워크의 다른 사람이 열 수 없습니다. 토큰은 같은 PC에서 도는
+다른 프로그램이나 브라우저로 방문한 웹사이트가 이 서버를 두드리는 것까지 막아줍니다.
+
+### 토큰 고정하기
+
+기본값은 실행할 때마다 새 토큰이라 주소를 즐겨찾기에 둘 수 없습니다. 고정 주소로 안내해야
+한다면 토큰을 정해 주세요.
+
+```bash
+csvinsight app.csv --token 정해둔값              # 최소 8자
+set CSVINSIGHT_TOKEN=정해둔값 && csvinsight app.csv   # Windows
+CSVINSIGHT_TOKEN=정해둔값 csvinsight app.csv          # macOS/Linux
+```
+
+명령줄은 같은 PC의 다른 사용자에게 보입니다(`ps`, 작업 관리자). 그래서 **환경변수 쪽을
+권합니다.** 고정 토큰을 쓰면 실행할 때 그 사실을 알려줍니다 — 주소를 아는 사람은 그 PC에서
+열려 있는 파일을 보고 고칠 수 있으니, 아무에게나 알려줄 주소는 아닙니다.
 
 ### 실행 파일(exe)로 쓰기
 
@@ -274,7 +290,7 @@ python3 -m csvinsight convert app.csv -o excel.csv --encoding utf-8-sig --newlin
 ## 개발
 
 ```bash
-python3 tools/run_tests.py                      # 178개 테스트 (타임아웃 포함)
+python3 tools/run_tests.py                      # 190개 테스트 (타임아웃 포함)
 python3 tools/run_pool_tests.py                 # 워커 프로세스 테스트
 python3 tools/make_sample_log.py sample.csv --rows 2000000   # 시험용 로그 생성
 python3 tools/make_sample_firewall_log.py fw.csv --rows 300000  # 멀티 서치 시험용

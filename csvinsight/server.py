@@ -964,9 +964,13 @@ def serve(
     verbose: bool = False,
     use_cache: bool = True,
     workers: Optional[int] = None,
+    token: Optional[str] = None,
 ) -> CsvInsightServer:
+    """Start the local server. ``token`` fixes the access token; by default a
+    fresh one is minted per run, which is what keeps another program on the
+    machine from talking to this server."""
     session = Session(path, use_cache=use_cache, workers=workers)
-    token = secrets.token_urlsafe(24)
+    token = token or secrets.token_urlsafe(24)
     server = CsvInsightServer((host, port), session, token, verbose=verbose)
     url = f"http://{host}:{server.server_address[1]}/?t={token}"
     server.url = url

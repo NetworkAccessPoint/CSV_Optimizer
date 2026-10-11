@@ -14,6 +14,8 @@ import os
 import sys
 import time
 
+from typing import Optional
+
 from . import __version__
 from .index import sniff
 from .ops import Condition, run_filter
@@ -62,12 +64,43 @@ def _finish(label: str) -> None:
     sys.stderr.flush()
 
 
+TOKEN_ENV = "CSVINSIGHT_TOKEN"
+MIN_TOKEN = 8
+
+
+def _fixed_token(given: Optional[str]) -> Optional[str]:
+    """The token to pin, from the flag or the environment, or None for random.
+
+    A customer-facing install often wants one stable address, so the token can
+    be fixed. It is still the only thing standing between this server and any
+    other program on the machine, so a token too short to be worth typing is
+    refused rather than quietly accepted.
+
+    The environment variable is offered because a command line is visible to
+    every user on the machine (``ps``, 작업 관리자), and a token in it is not.
+    """
+    raw = given if given is not None else os.environ.get(TOKEN_ENV)
+    if raw is None:
+        return None
+    token = raw.strip()
+    if len(token) < MIN_TOKEN:
+        raise ValueError(
+            f"토큰이 너무 짧습니다 ({len(token)}자). {MIN_TOKEN}자 이상으로 정해주세요."
+        )
+    return token
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .server import serve
 
     path = os.path.abspath(args.path) if args.path else None
     if path and not os.path.isfile(path):
         print(f"파일을 찾을 수 없습니다: {path}", file=sys.stderr)
+        return 2
+    try:
+        token = _fixed_token(args.token)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
         return 2
     server = serve(
         path=path,
@@ -77,10 +110,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
         verbose=args.verbose,
         use_cache=not args.no_cache,
         workers=args.workers,
+        token=token,
     )
     # flush: a frozen build's stdout is block buffered when it is not a tty
     print(f"CSV Insight {__version__} — {server.url}", flush=True)
     print("브라우저가 열리지 않으면 위 주소를 직접 붙여넣으세요. 종료하려면 Ctrl+C.", flush=True)
+    if token:
+        print("고정 토큰을 쓰고 있습니다. 이 주소를 아는 사람은 이 PC에서 "
+              "열려 있는 파일을 보고 고칠 수 있습니다.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -179,6 +216,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_open.add_argument("--host", default="127.0.0.1", help="바인드 주소 (기본: 127.0.0.1)")
     p_open.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
     p_open.add_argument("-v", "--verbose", action="store_true", help="요청 로그 출력")
+    p_open.add_argument(
+        "--token",
+        help="접속 토큰을 고정합니다 (기본: 실행할 때마다 새로 생성). "
+             "주소를 즐겨찾기에 두거나 고정 주소로 안내할 때 씁니다. "
+             f"환경변수 {TOKEN_ENV} 로도 지정할 수 있습니다.",
+    )
     p_open.add_argument(
         "--no-cache", action="store_true",
         help="인덱스 캐시(.csvidx)를 만들지 않음 (읽기 전용/네트워크 드라이브)",
