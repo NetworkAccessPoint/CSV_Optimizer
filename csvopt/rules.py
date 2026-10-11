@@ -435,6 +435,11 @@ _KIND_WORDS = {
     "ports": ("port", "ports", "포트", "svc", "service", "서비스"),
     "equals": ("protocol", "proto", "프로토콜"),
 }
+# Columns a firewall adds beside the real one: the address after translation,
+# the port after translation.  A policy table talks about the traffic as the
+# rule sees it, so a name the rule did not ask for counts against the column.
+_QUALIFIER_WORDS = ("nat", "snat", "dnat", "xlate", "translated", "mapped",
+                    "post", "변환", "변환후")
 
 
 def _tokens(name: str) -> set[str]:
@@ -540,61 +545,92 @@ def auto_mapping(
             if not rule_role and log_role == "dst":
                 # A policy table's bare "Port" means the destination port.
                 score += 6
+            qualifiers = set(_QUALIFIER_WORDS)
+            if (log_tokens & qualifiers) and not (rule_tokens & qualifiers):
+                # "NAT Source IP" is not what a rule's "Source" means.
+                score -= 15
             if score > 0:
                 scores.append((score, position, index))
     # Greedy one-to-one assignment: the most confident pair wins first.
     mapping: list[dict] = [
         {"column": None, "kind": kind} for kind in rule_kinds
     ]
+    ranked: dict[int, list[int]] = {}
     taken_logs: set[int] = set()
     taken_rules: set[int] = set()
     for _score, position, index in sorted(scores, key=lambda s: (-s[0], s[1], s[2])):
+        ranked.setdefault(position, []).append(table.columns[index].id)
         if position in taken_rules or index in taken_logs:
             continue
         mapping[position]["column"] = table.columns[index].id
         taken_rules.add(position)
         taken_logs.add(index)
-    return _settle_directions(table, rows, mapping)
+    return repair_mapping(table, rows, mapping, ranked)
 
 
 def _sample_hits(table: Table, rows: list[list[str]], mapping: list[dict],
-                 sample: int = 4000) -> int:
-    """How many of the log's first rows this mapping would catch."""
+                 data: list[list[str]]) -> int:
+    """How many of the sampled log rows this mapping would catch."""
     ruleset = build_ruleset(table, rows, mapping)
     if ruleset.empty:
         return 0
-    _ids, data = table.read_range(0, sample)
     match = ruleset.match
     return sum(1 for row in data if match(row) >= 0)
 
 
-def _settle_directions(table: Table, rows: list[list[str]], mapping: list[dict],
-                       sample: int = 4000) -> list[dict]:
-    """Fix an address mapping that caught nothing by trying the other way round.
+def _reassign(mapping: list[dict], position: int, column: int) -> list[dict]:
+    """Hand one rule column a different log column, swapping with its owner."""
+    trial = [dict(spec) for spec in mapping]
+    for other, spec in enumerate(trial):
+        if other != position and spec["column"] == column:
+            spec["column"] = trial[position]["column"]
+    trial[position]["column"] = column
+    return trial
 
-    Names cannot tell a source column from a destination column when the log
-    calls them ``f2`` and ``f3``, and falling back to column order gets a log
-    that lists the destination first exactly backwards.  Catching nothing at
-    all is the symptom, so the alternative is only worth trying then -- and a
-    review that quietly reports every policy as unused is worse than a slow
-    guess.
+
+def repair_mapping(
+    table: Table,
+    rows: list[list[str]],
+    mapping: list[dict],
+    ranked: dict,
+    sample: int = 2000,
+    tries: int = 4,
+    passes: int = 2,
+) -> list[dict]:
+    """Try the runners-up when the guessed mapping catches nothing at all.
+
+    A mapping that is merely wrong looks exactly like a clean bill of health:
+    every rule reports zero hits, which a policy review reads as "none of this
+    is in use".  Names cannot always settle it -- a log may call its columns
+    ``f1`` and ``f2``, or offer ``Source address`` beside ``NAT Source IP`` --
+    so when nothing matches, the next-best candidates are worth the moment it
+    takes to try them against a sample.
+
+    A mapping that already catches rows is never touched, and if no
+    arrangement catches anything the original guess stands: the rules may
+    simply be unused, which is an answer in itself.
     """
-    slots = [
-        i for i, spec in enumerate(mapping)
-        if spec.get("kind") == "ip" and spec.get("column") is not None
-    ]
-    if not 2 <= len(slots) <= 3 or _sample_hits(table, rows, mapping, sample):
+    _ids, data = table.read_range(0, sample)
+    if not data or _sample_hits(table, rows, mapping, data):
         return mapping
-    columns = [mapping[i]["column"] for i in slots]
-    for order in permutations(range(len(slots))):
-        if order == tuple(range(len(slots))):
-            continue        # the arrangement that just failed
-        trial = [dict(spec) for spec in mapping]
-        for slot, source in zip(slots, order):
-            trial[slot]["column"] = columns[source]
-        if _sample_hits(table, rows, trial, sample):
-            return trial
-    return mapping
+    current = mapping
+    for _ in range(passes):
+        best: Optional[list[dict]] = None
+        best_hits = 0
+        for position, candidates in ranked.items():
+            if current[position].get("kind") == "ignore":
+                continue
+            for column in candidates[:tries]:
+                if column == current[position]["column"]:
+                    continue
+                trial = _reassign(current, position, column)
+                hits = _sample_hits(table, rows, trial, data)
+                if hits > best_hits:
+                    best, best_hits = trial, hits
+        if best is None:
+            break
+        current = best
+    return current if _sample_hits(table, rows, current, data) else mapping
 
 
 def build_ruleset(

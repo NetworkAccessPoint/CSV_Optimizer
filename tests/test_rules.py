@@ -156,7 +156,7 @@ class RunCase(unittest.TestCase):
     def test_a_mapping_that_already_works_is_left_alone(self):
         mapping = self.mapping()
         self.assertEqual(
-            rules._settle_directions(self.table, self.rows, mapping), mapping)
+            rules.repair_mapping(self.table, self.rows, mapping, {}), mapping)
 
     def test_direction_swap_is_not_attempted_when_nothing_can_match(self):
         # Rules nothing in the log satisfies must stay as mapped, not churn.
@@ -303,6 +303,117 @@ class RunCase(unittest.TestCase):
     def test_limit_stops_early(self):
         result = rules.run_rules(self.table, self.build(), limit=2)
         self.assertEqual(len(result.ids), 2)
+
+
+# A Palo Alto traffic export, trimmed to the columns that matter here: the
+# translated address and port sit right beside the real ones, and the
+# application name sits beside the IP protocol.
+PANOS = (
+    "Receive Time,Source address,NAT Source IP,Destination address,"
+    "NAT Destination IP,Application,Source Port,Destination Port,"
+    "NAT Destination Port,IP Protocol,Action\n"
+    "2026/03/01 00:00:00,70.222.12.5,0.0.0.0,105.181.150.6,0.0.0.0,"
+    "snmp,41000,161,0,udp,allow\n"
+    "2026/03/01 00:00:01,105.181.150.6,0.0.0.0,70.222.12.62,0.0.0.0,"
+    "syslog,41001,514,0,udp,allow\n"
+    "2026/03/01 00:00:02,70.222.12.9,0.0.0.0,105.181.150.6,0.0.0.0,"
+    "ssh,41002,22,0,tcp,allow\n"
+    "2026/03/01 00:00:03,192.168.40.8,203.0.113.7,105.181.156.9,0.0.0.0,"
+    "web-browsing,41003,443,8080,tcp,allow\n"
+)
+
+PANOS_POLICY = (
+    "Source\tDestination\tProtocol\tPort\tPurpose\n"
+    "70.222.12.0/26\t105.181.150.6\tUDP\t161\tSNMP\n"
+    "105.181.150.6\t70.222.12.62\tUDP\t514\tSyslog\n"
+    "70.222.12.0/26\t105.181.150.6\tTCP\t22, 23\tConfig Backup\n"
+)
+
+
+class PanOsCase(unittest.TestCase):
+    """A vendor export where the tempting wrong column sits next to the right one."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.header, self.rows = rules.parse_table(PANOS_POLICY)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def table(self, text, name="panos.csv"):
+        path = os.path.join(self.dir.name, name)
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        return Table(path, use_cache=False)
+
+    def picked(self, table):
+        names = {c.id: c.name for c in table.columns}
+        return [
+            names.get(spec["column"])
+            for spec in rules.auto_mapping(table, self.header, self.rows)
+        ]
+
+    def test_translated_columns_do_not_steal_the_mapping(self):
+        table = self.table(PANOS)
+        try:
+            self.assertEqual(
+                self.picked(table),
+                ["Source address", "Destination address", "IP Protocol",
+                 "Destination Port", None],
+            )
+        finally:
+            table.close()
+
+    def test_translated_columns_listed_first_still_lose(self):
+        swapped = []
+        for line in PANOS.strip().split("\n"):
+            cells = line.split(",")
+            # NAT Source IP <-> Source address, NAT Destination IP <-> Destination
+            cells[1], cells[2] = cells[2], cells[1]
+            cells[3], cells[4] = cells[4], cells[3]
+            cells[7], cells[8] = cells[8], cells[7]
+            swapped.append(",".join(cells))
+        table = self.table("\n".join(swapped) + "\n", "nat-first.csv")
+        try:
+            self.assertEqual(
+                self.picked(table),
+                ["Source address", "Destination address", "IP Protocol",
+                 "Destination Port", None],
+            )
+        finally:
+            table.close()
+
+    def test_application_does_not_win_over_ip_protocol(self):
+        table = self.table(PANOS)
+        try:
+            self.assertEqual(self.picked(table)[2], "IP Protocol")
+        finally:
+            table.close()
+
+    def test_lowercase_protocol_still_matches_an_uppercase_rule(self):
+        table = self.table(PANOS)
+        try:
+            mapping = rules.auto_mapping(table, self.header, self.rows)
+            result = rules.run_rules(
+                table, rules.build_ruleset(table, self.rows, mapping))
+            self.assertEqual(result.counts, [1, 1, 1])
+        finally:
+            table.close()
+
+    def test_values_alone_carry_an_export_with_no_header(self):
+        table = self.table("\n".join(PANOS.strip().split("\n")[1:]) + "\n", "bare.csv")
+        try:
+            positions = {c.id: i for i, c in enumerate(table.columns)}
+            mapping = rules.auto_mapping(table, self.header, self.rows)
+            self.assertEqual(
+                [positions.get(spec["column"]) for spec in mapping],
+                [1, 3, 9, 7, None],
+            )
+            result = rules.run_rules(
+                table, rules.build_ruleset(table, self.rows, mapping))
+            self.assertEqual(result.counts, [1, 1, 1])
+        finally:
+            table.close()
 
 
 if __name__ == "__main__":
