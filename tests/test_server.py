@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 from csvinsight import cli
-from csvinsight.server import serve
+from csvinsight.server import serve, within_root
 
 DATA = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,tail\n"
 
@@ -587,10 +587,14 @@ class RootConfinementTest(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        self.allowed = os.path.join(self.dir.name, "logs")
-        self.outside = os.path.join(self.dir.name, "secret")
-        os.makedirs(self.allowed)
-        os.makedirs(self.outside)
+        # The server resolves the root (that is what stops a link or a Windows
+        # 8.3 short name from stepping out of it), so the test compares against
+        # the resolved form too: a temp directory is "C:\\Users\\RUNNER~1\\..."
+        # on Windows and "/var/..." for "/private/var/..." on macOS.
+        self.allowed = os.path.realpath(os.path.join(self.dir.name, "logs"))
+        self.outside = os.path.realpath(os.path.join(self.dir.name, "secret"))
+        os.makedirs(self.allowed, exist_ok=True)
+        os.makedirs(self.outside, exist_ok=True)
         self.inside_file = os.path.join(self.allowed, "a.csv")
         with open(self.inside_file, "w", encoding="utf-8") as fh:
             fh.write("a,b\n1,2\n")
@@ -650,6 +654,24 @@ class RootConfinementTest(unittest.TestCase):
 
     def test_the_root_is_reported_in_the_state(self):
         self.assertEqual(self.call("state")["root"], self.allowed)
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "needs symlinks")
+    def test_a_root_given_through_a_link_is_normalised(self):
+        # The root may arrive unresolved -- a symlink, or a Windows short name.
+        # It has to be normalised before anything is compared against it, or a
+        # path that is really inside would look like it is outside.
+        link = os.path.join(self.dir.name, "link-to-logs")
+        try:
+            os.symlink(self.allowed, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks not permitted here")
+        server = serve(self.inside_file, port=0, open_browser=False, root=link)
+        try:
+            self.assertEqual(server.session.root, self.allowed)
+            self.assertTrue(within_root(server.session.root, self.inside_file))
+            self.assertFalse(within_root(server.session.root, self.outside_file))
+        finally:
+            server.server_close()
 
 
 class NoRootTest(ServerCase):
