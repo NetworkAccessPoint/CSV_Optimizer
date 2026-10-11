@@ -60,6 +60,7 @@
     </section>
 
     <aside id="side" class="side hidden">
+      <div id="side-grip" class="side-grip" title="끌어서 패널 너비 조절"></div>
       <div class="side-tabs">
         <button data-tab="facets" class="tab active">값 분포</button>
         <button data-tab="find" class="tab" title="찾기·바꾸기">찾기</button>
@@ -123,20 +124,19 @@
         </div>
         <div data-panel="rules" class="panel hidden">
           <div class="muted">
-            방화벽 정책표처럼 조건이 여러 줄인 표를 엑셀에서 복사해 그대로 붙여넣으세요.
-            한 줄은 <b>AND</b>, 줄끼리는 <b>OR</b>로 묶여 한 번의 스캔으로 전부 찾습니다.
-            CIDR(<code>10.0.0.0/26</code>)과 포트 목록(<code>22, 23</code>)을 알아서 해석합니다.
+            방화벽 정책표처럼 조건이 여러 줄인 표를 아래 칸에 <b>엑셀에서 복사해 붙여넣거나</b>
+            직접 입력하세요. 한 줄은 <b>AND</b>, 줄끼리는 <b>OR</b> 로 묶여 한 번의 스캔으로
+            전부 찾습니다. 각 열 머리의 <b>→ 드롭다운</b>이 그 조건을 로그의 어느 열과
+            비교하는지입니다. 자동으로 잡아두지만 언제든 바꿀 수 있습니다.
           </div>
-          <textarea id="rules-text" rows="6" spellcheck="false"
-            placeholder="Source&#9;Destination&#9;Protocol&#9;Port&#9;Purpose&#10;70.222.12.0/26&#9;105.181.150.6&#9;UDP&#9;161&#9;SNMP"></textarea>
+          <div id="rules-sheet"></div>
           <div class="row wrap">
-            <button id="rules-parse" class="btn small">조건 읽기</button>
-            <button id="rules-run" class="btn small primary" disabled>전체 검색</button>
+            <button id="rules-run" class="btn small primary">전체 검색</button>
+            <button id="rules-auto" class="btn small">열 자동 연결</button>
             <label class="chk"><input type="checkbox" id="rules-scope"> 현재 결과 내에서</label>
             <span class="spacer"></span>
-            <button id="rules-clear" class="btn small ghost">초기화</button>
+            <button id="rules-clear" class="btn small ghost">비우기</button>
           </div>
-          <div id="rules-map" class="rulemap hidden"></div>
           <div id="rules-out" class="rulesout"></div>
         </div>
         <div data-panel="cols" class="panel hidden">
@@ -180,6 +180,7 @@
 <div id="ctx" class="ctx hidden"></div>
 <script src="/static/api.js"></script>
 <script src="/static/grid.js"></script>
+<script src="/static/sheet.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

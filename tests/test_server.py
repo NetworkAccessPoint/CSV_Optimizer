@@ -318,6 +318,33 @@ class RuleApiTest(ServerCase):
             self.call("rules_parse", text="   \n\n")
         self.assertEqual(ctx.exception.code, 400)
 
+    def test_remap_guesses_from_a_sheet_being_edited(self):
+        # The sheet sends its own header and rows, with no pasted text.
+        res = self.call(
+            "rules_map",
+            header=["Source", "Destination", "Protocol", "Port"],
+            rows=[["70.222.12.0/26", "105.181.150.6", "UDP", "161"]],
+        )
+        names = {c["id"]: c["name"] for c in res["columns"]}
+        self.assertEqual([names.get(m["column"]) for m in res["mapping"]],
+                         ["src_ip", "dst_ip", "protocol", "dst_port"])
+        self.assertEqual(res["kinds"], ["ip", "ip", "equals", "ports"])
+
+    def test_remap_honours_kinds_the_user_set(self):
+        res = self.call(
+            "rules_map",
+            header=["Source", "Port"],
+            rows=[["70.222.12.5", "161"]],
+            kinds=["ip", "ignore"],
+        )
+        self.assertIsNone(res["mapping"][1]["column"])
+        self.assertEqual(res["mapping"][1]["kind"], "ignore")
+
+    def test_remap_without_rows_is_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.call("rules_map", header=["Source"], rows=[])
+        self.assertEqual(ctx.exception.code, 400)
+
     def test_run_reports_a_count_per_rule_and_filters_the_view(self):
         job = self.run_rules()
         self.assertEqual(job["status"], "done")

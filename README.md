@@ -77,8 +77,18 @@ CSV 파일을 exe 위로 끌어다 놓아도 열립니다. (멀티프로세스 �
 
 **멀티 로그 서처 — 조건표 한 장을 통째로**
 
-방화벽 정책표처럼 "조건이 여러 줄인 표"를 엑셀·워드에서 복사해 **멀티 서치** 패널에 그대로
-붙여넣으면, 그 표 전체를 **한 번의 스캔**으로 로그에 맞춰 봅니다.
+방화벽 정책표처럼 "조건이 여러 줄인 표"를 **멀티 서치** 패널의 엑셀 모양 입력칸에
+붙여넣거나 직접 입력하면, 그 표 전체를 **한 번의 스캔**으로 로그에 맞춰 봅니다.
+
+* 입력칸은 **스프레드시트**입니다. 셀을 직접 고치고, 줄·열을 더하거나 지우고,
+  엑셀에서 복사한 블록을 커서 위치에 붙여넣을 수 있습니다
+  (<kbd>Enter</kbd>/<kbd>↑</kbd><kbd>↓</kbd> 줄 이동, <kbd>Tab</kbd> 칸 이동)
+* **각 열 머리에 그 열이 로그의 어느 열과 비교되는지가 드롭다운으로 붙어 있습니다.**
+  자동으로 잡아주되 어디로 잡혔는지 항상 보이고, 틀렸으면 그 자리에서 바꿉니다.
+  연결되지 않은 열은 노란색으로 표시됩니다
+* 검색하면 **조건별 건수가 그 줄 오른쪽에 바로 찍힙니다.** 0건은 빨간색이고,
+  건수를 클릭하면 그 조건에 맞는 행만 봅니다
+* 패널 왼쪽 경계를 끌면 넓어집니다(너비는 기억됩니다)
 
 * 한 줄 안의 칸들은 **AND**, 줄과 줄 사이는 **OR** — 정책표를 읽는 방식 그대로입니다
 * `70.222.12.0/26` 같은 **CIDR**, `22, 23` 같은 **포트 목록**, 프로토콜, 포함·정규식·숫자 비교 지원
@@ -255,7 +265,7 @@ python3 -m csvopt convert app.csv -o excel.csv --encoding utf-8-sig --newline cr
 ## 개발
 
 ```bash
-python3 tools/run_tests.py                      # 163개 테스트 (타임아웃 포함)
+python3 tools/run_tests.py                      # 178개 테스트 (타임아웃 포함)
 python3 tools/run_pool_tests.py                 # 워커 프로세스 테스트
 python3 tools/make_sample_log.py sample.csv --rows 2000000   # 시험용 로그 생성
 python3 tools/make_sample_firewall_log.py fw.csv --rows 300000  # 멀티 서치 시험용
@@ -277,7 +287,7 @@ csvopt/
   server.py   localhost 전용 HTTP API (토큰 인증)
   parallel.py 워커 프로세스 필터
   cli.py      open / info / grep / convert
-  web/        UI (의존성 없는 순수 JS)
+  web/        UI (의존성 없는 순수 JS, sheet.js = 조건 입력 스프레드시트)
 packaging/    PyInstaller 스펙과 빌드 스크립트
 ```
 

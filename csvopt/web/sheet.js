@@ -219,7 +219,7 @@
 
     render() {
       const width = this.header.length;
-      const template = `34px repeat(${width}, minmax(132px, 1fr)) 84px`;
+      const template = `30px repeat(${width}, minmax(104px, 1fr)) 70px`;
       this.root.innerHTML = '';
 
       const head = el('div', 'sheet-head');

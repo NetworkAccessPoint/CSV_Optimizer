@@ -504,6 +504,29 @@ class Api:
                 "log_kinds": rulelib.column_kinds(table),
             }
 
+    def do_rules_map(self, payload: dict) -> dict:
+        """Re-guess the column mapping for a sheet the user is editing."""
+        header = [str(h) for h in payload.get("header") or []]
+        rows = [[str(c) for c in row] for row in payload.get("rows") or []]
+        if not rows:
+            raise ValueError("조건이 없습니다")
+        kinds = payload.get("kinds")
+        if not kinds:
+            kinds = [
+                rulelib.guess_kind(
+                    [row[i] for row in rows if i < len(row)],
+                    header[i] if i < len(header) else "",
+                )
+                for i in range(max(len(header), max(len(r) for r in rows)))
+            ]
+        with self.session.lock:
+            table = self.session.require()
+            return {
+                "mapping": rulelib.auto_mapping(table, header, rows, list(kinds)),
+                "kinds": kinds,
+                "columns": [c.as_dict() for c in table.columns],
+            }
+
     def do_rules_run(self, payload: dict) -> dict:
         """Match every rule of the pasted table against the log, in one pass."""
         rows = [[str(c) for c in row] for row in payload.get("rows") or []]
