@@ -130,6 +130,43 @@ class RunCase(unittest.TestCase):
         finally:
             table.close()
 
+    def test_mapping_survives_unhelpful_column_names(self):
+        # A log whose header says nothing and lists the destination first:
+        # column order alone would read every rule backwards.
+        backwards = os.path.join(self.dir.name, "backwards.csv")
+        with open(backwards, "w", encoding="utf-8", newline="") as fh:
+            fh.write("f1,f2,f3,f4,f5,f6,f7\n")
+            for line in LOG.split("\n")[1:]:
+                if not line.strip():
+                    continue
+                cells = line.split(",")
+                fh.write(",".join([cells[0], cells[2], cells[1]] + cells[3:]) + "\n")
+        table = Table(backwards, use_cache=False)
+        try:
+            mapping = rules.auto_mapping(table, self.header, self.rows)
+            positions = {c.id: i for i, c in enumerate(table.columns)}
+            picked = [positions.get(spec["column"]) for spec in mapping]
+            self.assertEqual(picked, [2, 1, 3, 5, None])   # swapped back
+            result = rules.run_rules(
+                table, rules.build_ruleset(table, self.rows, mapping))
+            self.assertEqual(result.counts, [2, 1, 2, 1, 0])
+        finally:
+            table.close()
+
+    def test_a_mapping_that_already_works_is_left_alone(self):
+        mapping = self.mapping()
+        self.assertEqual(
+            rules._settle_directions(self.table, self.rows, mapping), mapping)
+
+    def test_direction_swap_is_not_attempted_when_nothing_can_match(self):
+        # Rules nothing in the log satisfies must stay as mapped, not churn.
+        header, rows = rules.parse_table(
+            "Source\tDestination\tPort\n203.0.113.1\t198.51.100.1\t161\n")
+        mapping = rules.auto_mapping(self.table, header, rows)
+        names = {c.id: c.name for c in self.table.columns}
+        self.assertEqual([names.get(s["column"]) for s in mapping],
+                         ["src_ip", "dst_ip", "dst_port"])
+
     def test_every_rule_counts_its_own_rows(self):
         result = rules.run_rules(self.table, self.build())
         self.assertEqual(result.counts, [2, 1, 2, 1, 0])
