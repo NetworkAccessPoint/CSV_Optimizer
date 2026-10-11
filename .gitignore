@@ -6,10 +6,10 @@ dist/
 .venv/
 venv/
 
-# csvopt working files
+# csvinsight working files
 *.csvidx
 *.bak
-*.csvopt.tmp
+*.csvinsight.tmp
 
 # editors / OS
 .vscode/

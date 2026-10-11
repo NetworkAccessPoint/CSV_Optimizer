@@ -1,12 +1,12 @@
-<img src="packaging/icons/icon.png" width="96" align="right" alt="csvopt 아이콘">
+<img src="packaging/icons/icon.png" width="96" align="right" alt="CSV Insight 아이콘">
 
-# csvopt — 대용량 CSV / 로그 편집기
+# CSV Insight — 대용량 CSV / 로그 편집기
 
 수 GB~수십 GB짜리 로그 CSV를 **통째로 메모리에 올리지 않고** 열어서 보고, 걸러내고, 고치고, 내보내는 도구입니다.
 파이썬 표준 라이브러리만 사용하므로 설치할 패키지가 없고, **Windows·macOS·Linux에서 동일하게** 동작합니다.
 UI는 로컬에서만 뜨는 작은 웹 서버 + 브라우저 화면입니다(외부로 나가는 통신 없음).
 
-![csvopt 화면](docs/screenshot-light.png)
+![CSV Insight 화면](docs/screenshot-light.png)
 
 검색어에 맞는 행을 한 번에 책갈피로 남긴 모습 (행 번호가 노란색):
 
@@ -22,21 +22,21 @@ UI는 로컬에서만 뜨는 작은 웹 서버 + 브라우저 화면입니다(�
 1. 이 폴더를 원하는 위치에 두고
 2. `run.bat` 을 더블클릭 → 브라우저가 열리고 파일 선택 창이 뜹니다.
    * CSV 파일을 **`run.bat` 위로 끌어다 놓으면** 그 파일이 바로 열립니다.
-   * 명령 프롬프트에서: `py -3 -m csvopt C:\logs\app.csv`
+   * 명령 프롬프트에서: `py -3 -m csvinsight C:\logs\app.csv`
 
 ### macOS
 
 1. `run.command` 를 더블클릭 (처음 한 번은 우클릭 → 열기)
-   * 터미널에서: `python3 -m csvopt ~/logs/app.csv`
+   * 터미널에서: `python3 -m csvinsight ~/logs/app.csv`
    * 실행 권한이 없다면 `chmod +x run.command`
 
 ### 어디서든
 
 ```bash
-python3 -m csvopt                 # 파일 없이 열고 UI에서 선택
-python3 -m csvopt app.csv         # 바로 열기
-python3 -m csvopt app.csv --port 8765 --no-browser
-pip install -e .                  # 선택: csvopt 명령으로 설치
+python3 -m csvinsight                 # 파일 없이 열고 UI에서 선택
+python3 -m csvinsight app.csv         # 바로 열기
+python3 -m csvinsight app.csv --port 8765 --no-browser
+pip install -e .                  # 선택: csvinsight 명령으로 설치
 ```
 
 주소에는 1회용 토큰이 붙습니다(`http://127.0.0.1:<포트>/?t=...`). 127.0.0.1에만 바인딩하고 토큰이
@@ -46,12 +46,12 @@ pip install -e .                  # 선택: csvopt 명령으로 설치
 
 파이썬 설치가 곤란한 PC(사내 표준 이미지 등)에서는 단일 실행 파일로 만들어 쓸 수 있습니다.
 
-* **직접 빌드**: `packaging\build_windows.bat` 더블클릭 → `dist\csvopt.exe` (약 8 MB, 그 자체로 완결)
-  * macOS/Linux: `packaging/build_macos.sh` → `dist/csvopt`
+* **직접 빌드**: `packaging\build_windows.bat` 더블클릭 → `dist\csvinsight.exe` (약 8 MB, 그 자체로 완결)
+  * macOS/Linux: `packaging/build_macos.sh` → `dist/csvinsight`
 * **CI로 빌드**: `.github/workflows/build.yml` 이 Windows·macOS·Linux 실행 파일을 만들어
   Actions 아티팩트로 올려줍니다. 태그를 밀거나 workflow_dispatch 로 직접 실행하면 됩니다.
 
-exe 는 CLI와 UI를 모두 담고 있어 `csvopt.exe app.csv`, `csvopt.exe grep ...` 처럼 그대로 쓰며,
+exe 는 CLI와 UI를 모두 담고 있어 `csvinsight.exe app.csv`, `csvinsight.exe grep ...` 처럼 그대로 쓰며,
 CSV 파일을 exe 위로 끌어다 놓아도 열립니다. (멀티프로세스 필터도 exe 안에서 동작합니다.)
 
 ## 무엇이 되나
@@ -176,11 +176,11 @@ Windows/Linux는 `Ctrl`, macOS는 `⌘` 입니다. UI의 `?` 버튼에서도 볼
 UI 없이 쓸 수 있는 하위 명령이 있습니다. 배치 처리나 원격 서버에서 유용합니다.
 
 ```bash
-python3 -m csvopt info app.csv                     # 인코딩·구분자·행 수·열 미리보기
-python3 -m csvopt grep app.csv -w level=ERROR -o errors.csv
-python3 -m csvopt grep app.csv -c "timeout" --op contains
-python3 -m csvopt grep app.csv -e "user:\d{5}"     # 정규식
-python3 -m csvopt convert app.csv -o excel.csv --encoding utf-8-sig --newline crlf
+python3 -m csvinsight info app.csv                     # 인코딩·구분자·행 수·열 미리보기
+python3 -m csvinsight grep app.csv -w level=ERROR -o errors.csv
+python3 -m csvinsight grep app.csv -c "timeout" --op contains
+python3 -m csvinsight grep app.csv -e "user:\d{5}"     # 정규식
+python3 -m csvinsight convert app.csv -o excel.csv --encoding utf-8-sig --newline crlf
 ```
 
 ## 성능
@@ -279,15 +279,15 @@ python3 tools/run_pool_tests.py                 # 워커 프로세스 테스트
 python3 tools/make_sample_log.py sample.csv --rows 2000000   # 시험용 로그 생성
 python3 tools/make_sample_firewall_log.py fw.csv --rows 300000  # 멀티 서치 시험용
 python3 tools/make_icons.py                     # 아이콘 다시 만들기 (Pillow 필요)
-python3 -m PyInstaller --clean --noconfirm packaging/csvopt.spec   # 실행 파일 빌드
+python3 -m PyInstaller --clean --noconfirm packaging/csvinsight.spec   # 실행 파일 빌드
 ```
 
 GitHub Actions 가 Windows·macOS·Linux × Python 3.9/3.12 에서 테스트를 돌리고,
-세 OS 의 실행 파일을 만들어 아티팩트로 올립니다(`csvopt-windows`, `csvopt-macos`,
-`csvopt-linux`). 실행 파일이 필요하면 Actions 탭의 최신 실행에서 받으면 됩니다.
+세 OS 의 실행 파일을 만들어 아티팩트로 올립니다(`csvinsight-windows`, `csvinsight-macos`,
+`csvinsight-linux`). 실행 파일이 필요하면 Actions 탭의 최신 실행에서 받으면 됩니다.
 
 ```
-csvopt/
+csvinsight/
   index.py    파일 스캔 · 인코딩/구분자/줄바꿈 판별 · 메모리 맵 인덱스 캐시
   bitset.py   행 비트셋 (책갈피 · 삭제 표시)
   table.py    행 시퀀스(비트셋 + 블록 Fenwick) · 편집 오버레이 · 책갈피 · 실행취소 · 저장
@@ -306,7 +306,7 @@ packaging/    PyInstaller 스펙과 빌드 스크립트
 
 * **디스크 여유**: 인덱스 캐시는 행당 8바이트입니다(1억 행 ≈ 800 MB). 원본 옆에 만들 수 없으면
   임시 폴더에 만들고, 그것도 막히면 메모리에 둡니다. 캐시를 아예 만들지 않으려면
-  `python3 -m csvopt open big.csv --no-cache` 로 실행하세요.
+  `python3 -m csvinsight open big.csv --no-cache` 로 실행하세요.
 * **저장**: 저장은 파일 전체를 다시 쓰므로 같은 디스크에 원본 크기만큼 여유가 필요합니다
   (부족하면 저장을 시작하기 전에 알려줍니다). `.bak` 백업까지 켜면 두 배가 필요하니
   10 GB급 파일에서는 백업 체크를 끄거나 "다른 이름으로 저장"을 쓰는 편이 낫습니다.

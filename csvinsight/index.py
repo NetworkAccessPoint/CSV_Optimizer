@@ -20,7 +20,7 @@ from itertools import accumulate, islice
 from typing import Callable, Iterable, Optional
 
 CHUNK = 4 << 20
-INDEX_MAGIC = b"CSVOPTIX2"
+INDEX_MAGIC = b"CSVINSIGHTIX2"
 INDEX_SUFFIX = ".csvidx"
 # The offset table starts on a 64 KiB boundary so it can be mmapped directly on
 # Windows too, where the mapping offset must be a multiple of the allocation
@@ -424,7 +424,7 @@ def index_cache_path(path: str) -> str:
 def _fallback_cache_path(path: str) -> str:
     """Index location for sources whose own directory is not writable."""
     digest = hashlib.sha1(os.path.abspath(path).encode("utf-8", "replace")).hexdigest()[:16]
-    return os.path.join(tempfile.gettempdir(), f"csvopt-{digest}{INDEX_SUFFIX}")
+    return os.path.join(tempfile.gettempdir(), f"csvinsight-{digest}{INDEX_SUFFIX}")
 
 
 def cache_candidates(path: str) -> list[str]:

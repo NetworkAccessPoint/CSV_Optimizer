@@ -9,8 +9,8 @@ import os
 import tempfile
 import unittest
 
-from csvopt import ops, parallel
-from csvopt.table import Table
+from csvinsight import ops, parallel
+from csvinsight.table import Table
 
 
 class SegmentTest(unittest.TestCase):
@@ -58,7 +58,7 @@ class PlanTest(unittest.TestCase):
 class WorkerPoolTest(unittest.TestCase):
     """Actually spawns processes; kept to one small file to stay quick.
 
-    Only runs when CSVOPT_TEST_POOL=1, which ``tools/run_pool_tests.py`` sets.
+    Only runs when CSVINSIGHT_TEST_POOL=1, which ``tools/run_pool_tests.py`` sets.
     Spawned workers re-import the program's __main__ module, and under
     ``python -m unittest`` that module is the unittest runner itself, which
     re-runs the suite inside every worker -- harmless on some platforms,
@@ -68,10 +68,10 @@ class WorkerPoolTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if os.environ.get("CSVOPT_TEST_POOL") != "1":
+        if os.environ.get("CSVINSIGHT_TEST_POOL") != "1":
             raise unittest.SkipTest(
                 "worker-pool tests run via tools/run_pool_tests.py "
-                "(set CSVOPT_TEST_POOL=1 to run them here)"
+                "(set CSVINSIGHT_TEST_POOL=1 to run them here)"
             )
         cls.dir = tempfile.TemporaryDirectory()
         cls.path = os.path.join(cls.dir.name, "pool.csv")
@@ -85,7 +85,7 @@ class WorkerPoolTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.table.close()
-        from csvopt.index import drop_cached_index
+        from csvinsight.index import drop_cached_index
 
         drop_cached_index(cls.path)
         cls.dir.cleanup()
@@ -123,7 +123,7 @@ class WorkerPoolTest(unittest.TestCase):
         self.assertEqual(len(found), 10)
 
     def test_cancelling_raises_aborted(self):
-        from csvopt.index import Aborted
+        from csvinsight.index import Aborted
 
         conditions = self.conditions(column="level", op="equals", value="INFO")
         with self.assertRaises(Aborted):

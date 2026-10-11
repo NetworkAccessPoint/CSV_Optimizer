@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from array import array
 
-from csvopt import rules
-from csvopt.table import Table
+from csvinsight import rules
+from csvinsight.table import Table
 
 # A log shaped like a firewall export: the two directions of a managed device.
 LOG = (

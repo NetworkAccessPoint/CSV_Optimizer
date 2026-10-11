@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from csvopt.index import (
+from csvinsight.index import (
     HEADER_SIZE,
     build_index,
     cache_candidates,
@@ -85,7 +85,7 @@ class ScanTest(unittest.TestCase):
     def test_progress_abort(self):
         path = write(b"a,b\n" + b"1,2\n" * 500000)
         self._paths = getattr(self, "_paths", []) + [path]
-        from csvopt.index import Aborted
+        from csvinsight.index import Aborted
 
         with self.assertRaises(Aborted):
             scan_offsets(path, progress=lambda done, total: False)

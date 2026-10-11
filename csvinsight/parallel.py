@@ -8,7 +8,7 @@ big enough that process start-up disappears next to the scan.
 
 ``spawn`` is used everywhere so the behaviour is identical on Windows, macOS and
 Linux; that also means the worker payload has to be picklable, which is why the
-workers rebuild a :class:`~csvopt.table.Table` from the file path instead of
+workers rebuild a :class:`~csvinsight.table.Table` from the file path instead of
 receiving one.
 """
 
@@ -38,7 +38,7 @@ SEGMENTS_PER_WORKER = 4
 MIN_SEGMENT_ROWS = 100_000
 # How long a brand new pool gets to answer a trivial task. Some hosts can start
 # processes but never get them running usefully (a __main__ that re-runs itself,
-# a locked-down sandbox); rather than hang, csvopt gives up and scans inline.
+# a locked-down sandbox); rather than hang, csvinsight gives up and scans inline.
 POOL_PROBE_TIMEOUT = 20.0
 
 
@@ -213,7 +213,7 @@ def run_rules_parallel(
     """Run a rule table across processes, or return None to scan inline.
 
     The rules travel as the pasted text plus the mapping rather than as a
-    compiled :class:`~csvopt.rules.RuleSet`: the compiled form holds closures,
+    compiled :class:`~csvinsight.rules.RuleSet`: the compiled form holds closures,
     which do not pickle, and rebuilding it in a worker costs microseconds.
     """
     total = table.row_count

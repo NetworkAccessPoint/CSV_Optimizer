@@ -1,4 +1,4 @@
-"""Local HTTP API + static file server for the csvopt web UI.
+"""Local HTTP API + static file server for the csvinsight web UI.
 
 Only the standard library is used, and the socket is bound to the loopback
 interface with a random per-run token, so the editor behaves like a desktop app
@@ -31,7 +31,7 @@ from .table import SaveError, Table
 def _web_dir() -> str:
     """Where the UI files live: next to this module, or inside the bundle."""
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, "csvopt", "web")
+        return os.path.join(sys._MEIPASS, "csvinsight", "web")
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 
 
@@ -842,7 +842,7 @@ def _roots() -> list[str]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "csvopt"
+    server_version = "CSVInsight"
     protocol_version = "HTTP/1.1"
 
     # -------------------------------------------------------------- plumbing
@@ -855,7 +855,7 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         if host and host not in LOCAL_HOSTS:
             return False  # blocks DNS-rebinding from a page in another tab
-        token = self.headers.get("X-Csvopt-Token") or ""
+        token = self.headers.get("X-CsvInsight-Token") or ""
         if not token:
             token = parse_qs(urlparse(self.path).query).get("t", [""])[0]
         return hmac.compare_digest(token, self.server.token)
@@ -944,7 +944,7 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"not JSON serialisable: {type(obj).__name__}")
 
 
-class CsvOptServer(ThreadingHTTPServer):
+class CsvInsightServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
@@ -964,10 +964,10 @@ def serve(
     verbose: bool = False,
     use_cache: bool = True,
     workers: Optional[int] = None,
-) -> CsvOptServer:
+) -> CsvInsightServer:
     session = Session(path, use_cache=use_cache, workers=workers)
     token = secrets.token_urlsafe(24)
-    server = CsvOptServer((host, port), session, token, verbose=verbose)
+    server = CsvInsightServer((host, port), session, token, verbose=verbose)
     url = f"http://{host}:{server.server_address[1]}/?t={token}"
     server.url = url
     if open_browser:

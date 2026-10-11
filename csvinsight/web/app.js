@@ -1,4 +1,4 @@
-/* csvopt application wiring: toolbar, filters, side panels, dialogs, keyboard. */
+/* csvinsight application wiring: toolbar, filters, side panels, dialogs, keyboard. */
 (function () {
   'use strict';
 
@@ -1446,7 +1446,7 @@
 
   function rememberPanel(tab, open) {
     try {
-      localStorage.setItem('csvopt.panel', JSON.stringify({ tab: tab, open: !!open }));
+      localStorage.setItem('csvinsight.panel', JSON.stringify({ tab: tab, open: !!open }));
     } catch (err) { /* private mode */ }
   }
 
@@ -1483,7 +1483,7 @@
     const max = Math.max(SIDE_MIN, window.innerWidth - 360);
     const width = Math.round(Math.max(SIDE_MIN, Math.min(px, max)));
     document.documentElement.style.setProperty('--side-w', width + 'px');
-    try { localStorage.setItem('csvopt.side', String(width)); } catch (err) { /* private mode */ }
+    try { localStorage.setItem('csvinsight.side', String(width)); } catch (err) { /* private mode */ }
     if (grid) grid.render();
   }
 
@@ -1507,12 +1507,12 @@
 
   function applyTheme(theme) {
     document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem('csvopt.theme', theme); } catch (err) { /* private mode */ }
+    try { localStorage.setItem('csvinsight.theme', theme); } catch (err) { /* private mode */ }
   }
 
   async function boot() {
     let theme = 'light';
-    try { theme = localStorage.getItem('csvopt.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (err) { /* ignore */ }
+    try { theme = localStorage.getItem('csvinsight.theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); } catch (err) { /* ignore */ }
     applyTheme(theme);
 
     grid = new Grid({
@@ -1538,7 +1538,7 @@
     });
 
     try {
-      const saved = parseInt(localStorage.getItem('csvopt.side'), 10);
+      const saved = parseInt(localStorage.getItem('csvinsight.side'), 10);
       if (saved) setSideWidth(saved);
     } catch (err) { /* private mode */ }
     dragSide($('#side-grip'));
@@ -1619,7 +1619,7 @@
     document.querySelectorAll('.side-tabs .tab[data-tab]').forEach(
       (t) => { t.onclick = () => showTab(t.dataset.tab); });
     try {
-      const saved = JSON.parse(localStorage.getItem('csvopt.panel') || 'null');
+      const saved = JSON.parse(localStorage.getItem('csvinsight.panel') || 'null');
       if (saved && saved.open) openPanel(saved.tab, false);
     } catch (err) { /* private mode */ }
     window.addEventListener('beforeunload', (e) => {

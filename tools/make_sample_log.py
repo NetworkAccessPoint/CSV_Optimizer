@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a realistic sample log CSV for trying csvopt out.
+"""Generate a realistic sample log CSV for trying csvinsight out.
 
     python tools/make_sample_log.py sample.csv --rows 2000000
 """

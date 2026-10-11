@@ -6,7 +6,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from csvopt.server import serve
+from csvinsight.server import serve
 
 DATA = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,WARN,tail\n"
 
@@ -42,7 +42,7 @@ class ServerCase(unittest.TestCase):
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
-                "X-Csvopt-Token": self.server.token if token is None else token,
+                "X-CsvInsight-Token": self.server.token if token is None else token,
             },
         )
         with urllib.request.urlopen(req, timeout=10) as res:
@@ -69,7 +69,7 @@ class ServerTest(ServerCase):
     def test_rejects_foreign_host_header(self):
         req = urllib.request.Request(
             f"{self.base}/api/state", data=b"{}",
-            headers={"Host": "evil.example.com", "X-Csvopt-Token": self.server.token},
+            headers={"Host": "evil.example.com", "X-CsvInsight-Token": self.server.token},
         )
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(req, timeout=10)
@@ -82,7 +82,7 @@ class ServerTest(ServerCase):
 
     def test_index_page_and_static_assets(self):
         with urllib.request.urlopen(f"{self.base}/?t={self.server.token}", timeout=10) as res:
-            self.assertIn(b"csvopt", res.read())
+            self.assertIn("CSV Insight".encode(), res.read())
         for asset in ("app.js", "grid.js", "api.js", "style.css"):
             with urllib.request.urlopen(f"{self.base}/static/{asset}", timeout=10) as res:
                 self.assertEqual(res.status, 200)

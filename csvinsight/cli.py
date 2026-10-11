@@ -1,9 +1,9 @@
 """Command line entry point.
 
-    csvopt app.csv                 # open the editor in a browser
-    csvopt info app.csv            # print what was detected about the file
-    csvopt grep app.csv -w level=ERROR -o errors.csv
-    csvopt convert app.csv -o out.csv --encoding utf-8-sig --newline crlf
+    csvinsight app.csv                 # open the editor in a browser
+    csvinsight info app.csv            # print what was detected about the file
+    csvinsight grep app.csv -w level=ERROR -o errors.csv
+    csvinsight convert app.csv -o out.csv --encoding utf-8-sig --newline crlf
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         workers=args.workers,
     )
     # flush: a frozen build's stdout is block buffered when it is not a tty
-    print(f"csvopt {__version__} — {server.url}", flush=True)
+    print(f"CSV Insight {__version__} — {server.url}", flush=True)
     print("브라우저가 열리지 않으면 위 주소를 직접 붙여넣으세요. 종료하려면 Ctrl+C.", flush=True)
     try:
         server.serve_forever()
@@ -167,10 +167,10 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="csvopt",
+        prog="csvinsight",
         description="대용량 CSV/로그 뷰어·편집기 (Windows / macOS / Linux)",
     )
-    ap.add_argument("--version", action="version", version=f"csvopt {__version__}")
+    ap.add_argument("--version", action="version", version=f"CSV Insight {__version__}")
     sub = ap.add_subparsers(dest="command")
 
     p_open = sub.add_parser("open", help="편집기를 브라우저에서 열기 (기본 동작)")
@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()  # required by frozen (PyInstaller) builds
     _configure_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
-    # `csvopt app.csv` and `csvopt --port 9000 app.csv` both mean `csvopt open ...`.
+    # `csvinsight app.csv` and `csvinsight --port 9000 app.csv` both mean `csvinsight open ...`.
     if not argv or (argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "--version")):
         argv = ["open"] + argv
     args = build_parser().parse_args(argv)

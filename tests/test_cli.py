@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
-from csvopt.cli import main
+from csvinsight.cli import main
 
 DATA = "ts,level,msg\n1,INFO,hello\n2,ERROR,boom\n3,ERROR,again\n"
 
@@ -59,8 +59,8 @@ class CliTest(unittest.TestCase):
         self.assertIn(b"1\tINFO\thello\r\n", data)
 
     def test_bare_path_is_treated_as_open(self):
-        # `csvopt file.csv` must route to the server command, not fail parsing.
-        from csvopt import cli
+        # `csvinsight file.csv` must route to the server command, not fail parsing.
+        from csvinsight import cli
 
         called = {}
         original = cli.cmd_serve
@@ -95,7 +95,7 @@ class StdioTest(unittest.TestCase):
     def test_redirected_output_is_switched_to_utf8(self):
         import io
 
-        from csvopt.cli import _configure_stdio
+        from csvinsight.cli import _configure_stdio
 
         raw = io.BytesIO()
         stream = io.TextIOWrapper(raw, encoding="cp1252", newline="")

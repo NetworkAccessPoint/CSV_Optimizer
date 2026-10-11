@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build: one self-contained csvopt executable.
+"""PyInstaller build: one self-contained csvinsight executable.
 
-    pyinstaller packaging/csvopt.spec            # dist/csvopt(.exe)
-    pyinstaller packaging/csvopt.spec -- --onedir
+    pyinstaller packaging/csvinsight.spec            # dist/csvinsight(.exe)
+    pyinstaller packaging/csvinsight.spec -- --onedir
 
 The web UI files are data, not code, so they are collected explicitly; the
 server looks for them under sys._MEIPASS when frozen.
@@ -18,17 +18,17 @@ ONEDIR = "--onedir" in sys.argv
 # packaging/icons/source.webp by tools/make_icons.py.
 ICON = os.path.join(
     ROOT, "packaging", "icons",
-    "csvopt.ico" if sys.platform == "win32" else "csvopt.icns",
+    "csvinsight.ico" if sys.platform == "win32" else "csvinsight.icns",
 )
 if not os.path.exists(ICON):
     ICON = None
 
 a = Analysis(
-    [os.path.join(ROOT, "packaging", "csvopt_launcher.py")],
+    [os.path.join(ROOT, "packaging", "csvinsight_launcher.py")],
     pathex=[ROOT],
     binaries=[],
-    datas=[(os.path.join(ROOT, "csvopt", "web"), os.path.join("csvopt", "web"))],
-    hiddenimports=["csvopt.parallel"],  # imported lazily by the filter
+    datas=[(os.path.join(ROOT, "csvinsight", "web"), os.path.join("csvinsight", "web"))],
+    hiddenimports=["csvinsight.parallel"],  # imported lazily by the filter
     hookspath=[],
     runtime_hooks=[],
     excludes=["tkinter", "test", "unittest", "pydoc_data", "lib2to3"],
@@ -38,13 +38,13 @@ pyz = PYZ(a.pure)
 
 if ONEDIR:
     exe = EXE(
-        pyz, a.scripts, [], exclude_binaries=True, name="csvopt",
+        pyz, a.scripts, [], exclude_binaries=True, name="csvinsight",
         console=True, disable_windowed_traceback=False, icon=ICON,
     )
-    coll = COLLECT(exe, a.binaries, a.datas, name="csvopt")
+    coll = COLLECT(exe, a.binaries, a.datas, name="csvinsight")
 else:
     exe = EXE(
-        pyz, a.scripts, a.binaries, a.datas, [], name="csvopt",
+        pyz, a.scripts, a.binaries, a.datas, [], name="csvinsight",
         console=True, upx=False, disable_windowed_traceback=False,
         onefile=True, icon=ICON,
     )

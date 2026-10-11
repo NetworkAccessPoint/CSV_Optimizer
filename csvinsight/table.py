@@ -1183,7 +1183,7 @@ class Table:
         delimiter = delimiter or self.dialect.delimiter
         encoding = encoding or self.dialect.encoding
         newline = newline or self.dialect.newline
-        tmp = out_path + ".csvopt.tmp"
+        tmp = out_path + ".csvinsight.tmp"
         self._check_free_space(out_path)
         written = 0
         total = self.row_count

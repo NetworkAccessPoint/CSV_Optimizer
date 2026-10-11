@@ -3,12 +3,12 @@
 
     python tools/make_icons.py [source.webp]
 
-Writes packaging/icons/csvopt.ico (Windows), csvopt.icns (macOS) and
+Writes packaging/icons/csvinsight.ico (Windows), csvinsight.icns (macOS) and
 icon.png, plus the favicons the web UI serves. The artwork is kept in the
 repository so the icons can be rebuilt rather than treated as binaries that
 arrived from nowhere.
 
-Needs Pillow; nothing else in csvopt does, so this is a build-time tool and
+Needs Pillow; nothing else in csvinsight does, so this is a build-time tool and
 not part of the application.
 """
 
@@ -24,7 +24,7 @@ except ImportError:  # pragma: no cover - a build-time dependency
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONS = os.path.join(ROOT, "packaging", "icons")
-WEB = os.path.join(ROOT, "csvopt", "web")
+WEB = os.path.join(ROOT, "csvinsight", "web")
 SIZE = 1024
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 FAVICONS = [16, 32, 180]
@@ -78,16 +78,16 @@ def build(source: str) -> None:
         return out
 
     icon.save(os.path.join(ICONS, "icon.png"))
-    icon.save(os.path.join(ICONS, "csvopt.ico"), format="ICO",
+    icon.save(os.path.join(ICONS, "csvinsight.ico"), format="ICO",
               sizes=[(n, n) for n in ICO_SIZES])
-    icon.save(os.path.join(ICONS, "csvopt.icns"), format="ICNS")
+    icon.save(os.path.join(ICONS, "csvinsight.icns"), format="ICNS")
     for n in FAVICONS:
         scaled(n).save(os.path.join(WEB, f"icon-{n}.png"))
     scaled(32).save(os.path.join(WEB, "favicon.ico"), format="ICO",
                     sizes=[(16, 16), (32, 32)])
     print(f"본체 {box} · 모서리 반지름 {radius}")
-    print("packaging/icons/: icon.png, csvopt.ico, csvopt.icns")
-    print("csvopt/web/: favicon.ico, " + ", ".join(f"icon-{n}.png" for n in FAVICONS))
+    print("packaging/icons/: icon.png, csvinsight.ico, csvinsight.icns")
+    print("csvinsight/web/: favicon.ico, " + ", ".join(f"icon-{n}.png" for n in FAVICONS))
 
 
 if __name__ == "__main__":

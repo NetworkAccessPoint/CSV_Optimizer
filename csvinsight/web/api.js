@@ -1,4 +1,4 @@
-/* Thin client for the local csvopt API, plus job polling and platform helpers. */
+/* Thin client for the local csvinsight API, plus job polling and platform helpers. */
 (function (global) {
   'use strict';
 
@@ -9,7 +9,7 @@
   async function call(name, payload) {
     const res = await fetch('/api/' + name, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Csvopt-Token': TOKEN },
+      headers: { 'Content-Type': 'application/json', 'X-CsvInsight-Token': TOKEN },
       body: JSON.stringify(payload || {}),
     });
     let data;
