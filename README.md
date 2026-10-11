@@ -1,3 +1,5 @@
+<img src="packaging/icons/icon.png" width="96" align="right" alt="csvopt 아이콘">
+
 # csvopt — 대용량 CSV / 로그 편집기
 
 수 GB~수십 GB짜리 로그 CSV를 **통째로 메모리에 올리지 않고** 열어서 보고, 걸러내고, 고치고, 내보내는 도구입니다.
@@ -276,6 +278,7 @@ python3 tools/run_tests.py                      # 178개 테스트 (타임아웃
 python3 tools/run_pool_tests.py                 # 워커 프로세스 테스트
 python3 tools/make_sample_log.py sample.csv --rows 2000000   # 시험용 로그 생성
 python3 tools/make_sample_firewall_log.py fw.csv --rows 300000  # 멀티 서치 시험용
+python3 tools/make_icons.py                     # 아이콘 다시 만들기 (Pillow 필요)
 python3 -m PyInstaller --clean --noconfirm packaging/csvopt.spec   # 실행 파일 빌드
 ```
 
@@ -296,6 +299,7 @@ csvopt/
   cli.py      open / info / grep / convert
   web/        UI (의존성 없는 순수 JS, sheet.js = 조건 입력 스프레드시트)
 packaging/    PyInstaller 스펙과 빌드 스크립트
+  icons/      아이콘 원본(source.webp)과 생성물(.ico/.icns/.png)
 ```
 
 ## 대용량 파일을 다룰 때

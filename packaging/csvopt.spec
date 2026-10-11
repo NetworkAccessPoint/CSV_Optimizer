@@ -14,6 +14,15 @@ import sys
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 ONEDIR = "--onedir" in sys.argv
 
+# Windows wants .ico, macOS .icns; elsewhere the field is ignored. Built from
+# packaging/icons/source.webp by tools/make_icons.py.
+ICON = os.path.join(
+    ROOT, "packaging", "icons",
+    "csvopt.ico" if sys.platform == "win32" else "csvopt.icns",
+)
+if not os.path.exists(ICON):
+    ICON = None
+
 a = Analysis(
     [os.path.join(ROOT, "packaging", "csvopt_launcher.py")],
     pathex=[ROOT],
@@ -30,12 +39,12 @@ pyz = PYZ(a.pure)
 if ONEDIR:
     exe = EXE(
         pyz, a.scripts, [], exclude_binaries=True, name="csvopt",
-        console=True, disable_windowed_traceback=False,
+        console=True, disable_windowed_traceback=False, icon=ICON,
     )
     coll = COLLECT(exe, a.binaries, a.datas, name="csvopt")
 else:
     exe = EXE(
         pyz, a.scripts, a.binaries, a.datas, [], name="csvopt",
         console=True, upx=False, disable_windowed_traceback=False,
-        onefile=True,
+        onefile=True, icon=ICON,
     )
