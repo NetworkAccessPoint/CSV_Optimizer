@@ -168,6 +168,8 @@ body.wrap .cell { white-space: pre-wrap; word-break: break-word; line-height: 1.
        font-size: 12px; padding: 7px 3px; cursor: pointer; white-space: nowrap;
        border-bottom: 2px solid transparent; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tab.close { flex: 0 0 24px; font-size: 15px; line-height: 1; color: var(--muted); }
+.tab.close:hover { color: var(--danger); }
 .side-body { flex: 1; overflow: auto; padding: 10px; }
 .panel { display: flex; flex-direction: column; gap: 8px; }
 .panel .row { display: flex; gap: 6px; align-items: center; }
