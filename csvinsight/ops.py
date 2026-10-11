@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
 
+from .index import bytes_encoding
 from .table import Table
 
 Progress = Optional[Callable[[int, int], bool]]
@@ -267,7 +268,9 @@ def _prefilter_literals(table: Table, compiled: list["CompiledCondition"]) -> li
     skipped: with AND semantics, any subset of the required literals is still
     a sound pre-filter.
     """
-    encoding = table.dialect.encoding
+    encoding = bytes_encoding(table.dialect.encoding)
+    if encoding is None:  # UTF-16/32: an ASCII literal is not an ASCII byte run
+        return []
     specials = {table.dialect.delimiter, table.dialect.quotechar, "\n", "\r"}
     literals: list[tuple[bytes, bool]] = []
     for c in compiled:

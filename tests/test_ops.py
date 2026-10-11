@@ -201,6 +201,37 @@ class OpsTest(unittest.TestCase):
             ops.dedupe(self.table, max_keys=2)
         self.assertIn("중복 검사", str(ctx.exception))
 
+    def test_bom_file_still_matches_through_the_block_scan(self):
+        # Excel (and most firewall exports) write a BOM.  Encoding a literal
+        # with the file's own 'utf-8-sig' codec prepends a BOM to the literal
+        # too, so the block scan used to find nothing and the filter quietly
+        # returned zero rows.
+        path = os.path.join(self.dir.name, "bom.csv")
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write(DATA)
+        table = Table(path, use_cache=False)
+        self.assertEqual(table.dialect.encoding, "utf-8-sig")
+        level = table.columns[1].id
+        for cond in (
+            ops.Condition(col=level, op="equals", value="ERROR"),
+            ops.Condition(col=None, op="contains", value="ERROR"),
+            ops.Condition(col=None, op="regex", value=r"ERROR"),
+        ):
+            fast = list(ops.run_filter(table, [cond]))
+            slow = list(ops.run_filter(table, [cond], base_ids=list(table.all_ids())))
+            self.assertEqual(fast, [1, 3], cond.op)
+            self.assertEqual(fast, slow, cond.op)
+
+    def test_bom_file_parses_quoted_fields(self):
+        # The quote byte is matched against raw record bytes; encoded with
+        # 'utf-8-sig' it carried a BOM, so no record ever looked quoted and
+        # a quoted comma was split into two fields.
+        path = os.path.join(self.dir.name, "quoted.csv")
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write('id,msg\n1,"a,b"\n')
+        table = Table(path, use_cache=False)
+        self.assertEqual(table.read_physical(0), ["1", "a,b"])
+
     def test_filter_over_edited_rows_uses_overlay(self):
         self.table.set_cells([(0, self.cid["level"], "ERROR")])
         self.assertFalse(self.table.can_stream_raw())

@@ -21,7 +21,9 @@ from itertools import islice
 from typing import Callable, Iterable, Iterator, Optional
 
 from .bitset import POPCOUNT, Bitset
-from .index import Aborted, Dialect, RowIndex, build_index, drop_cached_index, sniff
+from .index import (
+    Aborted, Dialect, RowIndex, build_index, bytes_encoding, drop_cached_index, sniff,
+)
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
@@ -450,11 +452,15 @@ class Table:
         self.view_label: str = ""
         self.marks = Bitset(self.base_count)   # bookmarked physical rows
         self.virtual_marks: set[int] = set()   # bookmarked inserted rows
-        self._quote_byte = (
-            self.dialect.quotechar.encode(self.dialect.encoding, "replace")
-            if self.dialect.quotechar
-            else b""
-        )
+        # The quote byte is what tells the cheap split path whether a record
+        # may contain a quoted field.  None means "cannot be tested cheaply",
+        # and every record goes through the full csv parser.
+        self._quote_byte: Optional[bytes] = b""
+        if self.dialect.quotechar:
+            enc = bytes_encoding(self.dialect.encoding)
+            self._quote_byte = (
+                self.dialect.quotechar.encode(enc, "replace") if enc else None
+            )
         self._init_columns()
         self._orig_names = [c.name for c in self.columns]
 
@@ -528,7 +534,7 @@ class Table:
         -- are split directly, which is several times cheaper than handing them
         to :mod:`csv` and matters when a filter parses millions of candidates.
         """
-        if self._quote_byte and self._quote_byte in data:
+        if self._quote_byte is None or (self._quote_byte and self._quote_byte in data):
             return self._parse(data.decode(self.dialect.encoding, "replace"))
         text = data.decode(self.dialect.encoding, "replace")
         if text.endswith("\n"):

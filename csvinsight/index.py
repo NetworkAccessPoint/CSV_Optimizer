@@ -54,6 +54,30 @@ class Dialect:
         }
 
 
+# Codecs whose encoded form is not byte-compatible with ASCII: an ASCII
+# literal becomes NUL-interleaved, so a byte-level search over the raw file
+# cannot be trusted.
+_WIDE_CODECS = ("utf-16", "utf-32", "utf16", "utf32")
+
+
+def bytes_encoding(encoding: str) -> Optional[str]:
+    """The codec to use when turning text into bytes to compare with file bytes.
+
+    ``"x".encode("utf-8-sig")`` prepends a BOM to *every* string, not just the
+    first, so a literal encoded that way is never found in the file -- which
+    made byte-level searches on Excel-exported (BOM) CSVs quietly match
+    nothing.  The BOM belongs to the file, not to each string, so the plain
+    codec is the right one here.  Returns None when no byte-level comparison is
+    safe at all.
+    """
+    name = encoding.lower().replace("_", "-")
+    if name in ("utf-8-sig", "utf-8"):
+        return "utf-8"
+    if name.startswith(_WIDE_CODECS):
+        return None
+    return encoding
+
+
 def _decode_sample(data: bytes) -> tuple[str, str]:
     # A byte order mark is authoritative; without one, never guess an encoding
     # that would *add* a BOM when the file is written back.
