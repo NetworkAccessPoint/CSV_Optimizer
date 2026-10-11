@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csvopt"
+version = "0.1.0"
+description = "대용량 CSV/로그 파일을 위한 뷰어 겸 편집기 (표준 라이브러리만 사용)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["csv", "log", "viewer", "editor", "large-files"]
+classifiers = [
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Utilities",
+]
+dependencies = []
+
+[project.scripts]
+csvopt = "csvopt.cli:main"
+
+[tool.setuptools]
+packages = ["csvopt"]
+
+[tool.setuptools.package-data]
+csvopt = ["web/*"]
