@@ -201,6 +201,14 @@ class OpsTest(unittest.TestCase):
             ops.dedupe(self.table, max_keys=2)
         self.assertIn("중복 검사", str(ctx.exception))
 
+    def test_dotted_values_are_not_numbers(self):
+        # An IP column or a dotted date used to read as 168.126 / 2026.10, so
+        # the facet panel reported a min/max/average over addresses.
+        for text in ("168.126.63.1", "2026.10.11 21:57", "1.2.3"):
+            self.assertIsNone(ops.parse_number(text), text)
+        for text, want in (("12ms", 12.0), ("3.4MB", 3.4), ("1,234", 1234.0)):
+            self.assertEqual(ops.parse_number(text), want, text)
+
     def test_bom_file_still_matches_through_the_block_scan(self):
         # Excel (and most firewall exports) write a BOM.  Encoding a literal
         # with the file's own 'utf-8-sig' codec prepends a BOM to the literal

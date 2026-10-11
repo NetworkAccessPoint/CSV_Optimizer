@@ -49,6 +49,12 @@ def parse_number(value: str) -> Optional[float]:
         # Trailing units are common in logs: "12ms", "3.4MB".
         match = re.match(r"^[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)
         if match:
+            # ... but a dot right after the number means the number was never
+            # whole: "168.126.63.1" and "2026.10.11" are an address and a date,
+            # and reading them as 168.126 / 2026.10 turns a facet panel into
+            # nonsense (min/max/average over IP addresses).
+            if text[match.end():match.end() + 1] == ".":
+                return None
             try:
                 return float(match.group(0))
             except ValueError:
