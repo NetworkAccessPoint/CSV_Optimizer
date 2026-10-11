@@ -42,6 +42,8 @@ jobs:
     needs: test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    permissions:
+      contents: write        # for the builds/* mirror branches below
     strategy:
       fail-fast: false
       matrix:
@@ -49,12 +51,15 @@ jobs:
           - os: windows-latest
             artifact: csvopt-windows
             binary: dist/csvopt.exe
+            mirror: builds/windows
           - os: macos-latest
             artifact: csvopt-macos
             binary: dist/csvopt
+            mirror: builds/macos
           - os: ubuntu-latest
             artifact: csvopt-linux
             binary: dist/csvopt
+            mirror: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -75,3 +80,26 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.binary }}
           if-no-files-found: error
+      # Actions artifacts can only be fetched through the Actions API, which is
+      # not reachable from every environment (an agent sandbox, a locked-down
+      # network). Force-pushing the binary onto a throwaway branch makes it
+      # reachable with a plain `git fetch` over https, which is.
+      # Nothing else depends on these branches -- delete the step and the two
+      # branches and the artifacts above still carry every build.
+      - name: Mirror the binary to a builds branch
+        if: matrix.mirror != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          rm -rf mirror && mkdir mirror
+          cp "${{ matrix.binary }}" mirror/
+          echo "${{ matrix.artifact }} built from ${GITHUB_SHA} on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > mirror/BUILD.txt
+          cd mirror
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b "${{ matrix.mirror }}"
+          git add -A
+          git commit -qm "${{ matrix.artifact }} from ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "${{ matrix.mirror }}"
