@@ -20,7 +20,7 @@ import re
 from array import array
 from bisect import bisect_left
 from dataclasses import dataclass, field
-from itertools import islice
+from itertools import islice, permutations
 from typing import Callable, Iterable, Iterator, Optional
 
 from .table import Table
@@ -554,6 +554,46 @@ def auto_mapping(
         mapping[position]["column"] = table.columns[index].id
         taken_rules.add(position)
         taken_logs.add(index)
+    return _settle_directions(table, rows, mapping)
+
+
+def _sample_hits(table: Table, rows: list[list[str]], mapping: list[dict],
+                 sample: int = 4000) -> int:
+    """How many of the log's first rows this mapping would catch."""
+    ruleset = build_ruleset(table, rows, mapping)
+    if ruleset.empty:
+        return 0
+    _ids, data = table.read_range(0, sample)
+    match = ruleset.match
+    return sum(1 for row in data if match(row) >= 0)
+
+
+def _settle_directions(table: Table, rows: list[list[str]], mapping: list[dict],
+                       sample: int = 4000) -> list[dict]:
+    """Fix an address mapping that caught nothing by trying the other way round.
+
+    Names cannot tell a source column from a destination column when the log
+    calls them ``f2`` and ``f3``, and falling back to column order gets a log
+    that lists the destination first exactly backwards.  Catching nothing at
+    all is the symptom, so the alternative is only worth trying then -- and a
+    review that quietly reports every policy as unused is worse than a slow
+    guess.
+    """
+    slots = [
+        i for i, spec in enumerate(mapping)
+        if spec.get("kind") == "ip" and spec.get("column") is not None
+    ]
+    if not 2 <= len(slots) <= 3 or _sample_hits(table, rows, mapping, sample):
+        return mapping
+    columns = [mapping[i]["column"] for i in slots]
+    for order in permutations(range(len(slots))):
+        if order == tuple(range(len(slots))):
+            continue        # the arrangement that just failed
+        trial = [dict(spec) for spec in mapping]
+        for slot, source in zip(slots, order):
+            trial[slot]["column"] = columns[source]
+        if _sample_hits(table, rows, trial, sample):
+            return trial
     return mapping
 
 
