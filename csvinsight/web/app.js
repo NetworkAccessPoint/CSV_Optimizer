@@ -100,6 +100,7 @@
     $('#grid').classList.remove('hidden');
     $('#file-name').textContent = st.name + (st.dirty ? ' •' : '');
     $('#file-name').title = st.path;
+    renderStaleWarning(st);
     $('#file-sub').textContent =
       `${API.bytes(st.size)} · ${API.num(st.base_rows)}행 · ${st.dialect.encoding} · ` +
       `${st.dialect.delimiter === '\t' ? 'TAB' : st.dialect.delimiter} · ${st.dialect.newline.toUpperCase()}` +
@@ -120,6 +121,26 @@
     renderMarks();
     renderRuleSummary(st.rules);
     return st;
+  }
+
+  /* The file on disk no longer matches what was indexed -- a log that kept
+     growing, or one that rotated. Every row read is a seek to a recorded byte
+     offset, so from here on the grid may be showing the wrong bytes and a save
+     is refused outright. Say so where the file name is, not in a toast that
+     scrolls away. */
+  function renderStaleWarning(st) {
+    let box = $('#stale');
+    if (!st.file_changed) {
+      if (box) box.remove();
+      return;
+    }
+    if (box) return;
+    box = el('button', 'stale', '⚠ 파일이 바뀜 — 다시 열기');
+    box.id = 'stale';
+    box.title = '열어 둔 뒤 디스크의 파일이 바뀌었습니다. 보이는 내용이 실제와 다를 수 있고 '
+      + '저장은 거부됩니다. 눌러서 다시 여세요.';
+    box.onclick = () => openPath(st.path);
+    $('#file-sub').after(box);
   }
 
   function fillColumnSelects() {
@@ -318,22 +339,44 @@
       } catch (err) { fail(err); }
     }
 
-    async function open(path) {
-      if (!path) return;
-      try {
-        const job = await runJob('open', { path: path }, '인덱스 생성 중');
-        state.filters = [];
-        $('#quick').value = '';
-        renderChips();
-        grid.autoFitted = false;
-        grid.invalidate();
-        grid.marks.clear();
-        await refreshState();
-        say(`${API.num(job.result.rows)}행을 열었습니다. (${job.elapsed.toFixed(1)}초)`);
-      } catch (err) { fail(err); }
-    }
+    const open = openPath;
 
     browse((state.server && state.server.path) || '');
+  }
+
+  /* Opening another file throws away the overlay, so unsaved edits go with
+     it. The engine cannot ask, so the UI does. */
+  async function openPath(path) {
+    if (!path) return;
+    if (state.server && state.server.dirty) {
+      const ok = await confirmDialog(
+        '저장하지 않은 수정이 있습니다',
+        '다른 파일을 열면 지금까지 고친 내용이 사라집니다. 계속할까요?',
+        '열기');
+      if (!ok) return;
+    }
+    try {
+      const job = await runJob('open', { path: path }, '인덱스 생성 중');
+      state.filters = [];
+      $('#quick').value = '';
+      renderChips();
+      grid.autoFitted = false;
+      grid.invalidate();
+      grid.marks.clear();
+      await refreshState();
+      say(`${API.num(job.result.rows)}행을 열었습니다. (${job.elapsed.toFixed(1)}초)`);
+    } catch (err) { fail(err); }
+  }
+
+  function confirmDialog(title, text, okLabel) {
+    return new Promise((resolve) => {
+      const body = el('div');
+      body.appendChild(el('p', null, text));
+      modal(title, body, [
+        { label: '취소', action: () => resolve(false) },
+        { label: okLabel, primary: true, action: () => resolve(true) },
+      ]);
+    });
   }
 
   /* ----------------------------------------------------------- side panel */

@@ -131,6 +131,8 @@ class Session:
             "edited_rows": len(table.edits) + len(table.new_rows),
             "marks": table.mark_count,
             "deleted_rows": table.seq.deleted_count,
+            # Logs rotate under the editor; the UI warns before a save can go wrong.
+            "file_changed": table.file_changed(),
             "rules": self.rule_summary(),
         }
 
