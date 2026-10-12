@@ -52,6 +52,8 @@ jobs:
             artifact: csvinsight-windows
             binary: dist/csvinsight.exe
             mirror: builds/windows
+          # macos-latest is Apple Silicon; the binary it builds does not run
+          # on an Intel Mac (Mach-O arm64), and nobody here needs one.
           - os: macos-latest
             artifact: csvinsight-macos
             binary: dist/csvinsight
