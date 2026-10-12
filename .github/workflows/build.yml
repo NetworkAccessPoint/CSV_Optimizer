@@ -52,10 +52,16 @@ jobs:
             artifact: csvinsight-windows
             binary: dist/csvinsight.exe
             mirror: builds/windows
+          # macos-latest is Apple Silicon, and a binary built there does not
+          # run on an Intel Mac at all; macos-13 is the last Intel runner.
           - os: macos-latest
-            artifact: csvinsight-macos
+            artifact: csvinsight-macos-arm64
             binary: dist/csvinsight
             mirror: builds/macos
+          - os: macos-13
+            artifact: csvinsight-macos-intel
+            binary: dist/csvinsight
+            mirror: builds/macos-intel
           - os: ubuntu-latest
             artifact: csvinsight-linux
             binary: dist/csvinsight
